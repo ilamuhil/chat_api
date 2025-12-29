@@ -1,0 +1,148 @@
+organizations
+-------------
+id                uuid PRIMARY KEY
+name              text NOT NULL
+logo_url          text
+email             text
+phone             text
+address           jsonb
+created_at        timestamptz DEFAULT now()
+
+
+
+profiles
+--------
+id                uuid PRIMARY KEY  -- = auth.users.id
+full_name         text
+email             text NOT NULL
+created_at        timestamptz DEFAULT now()
+
+
+organization_members
+--------------------
+id                uuid PRIMARY KEY
+organization_id   uuid REFERENCES organizations(id)
+user_id           uuid REFERENCES profiles(id)
+role              text CHECK (role IN ('owner','admin','member'))
+created_at        timestamptz DEFAULT now()
+
+UNIQUE (organization_id, user_id)
+
+
+
+
+bots
+----
+id                       uuid PRIMARY KEY
+organization_id          uuid REFERENCES organizations(id)
+
+name                     text NOT NULL
+tone                     text
+role                     text
+business_description     text
+
+first_message             text
+confirmation_message      text
+lead_capture_message      text
+
+capture_leads            boolean DEFAULT false
+lead_capture_timing      text CHECK (
+  lead_capture_timing IN ('start','after_first')
+)
+
+capture_name              boolean DEFAULT false
+capture_email             boolean DEFAULT false
+capture_phone             boolean DEFAULT false
+
+created_at               timestamptz DEFAULT now()
+updated_at               timestamptz DEFAULT now()
+
+
+api_keys
+--------
+id                uuid PRIMARY KEY
+organization_id   uuid REFERENCES organizations(id)
+bot_id            uuid REFERENCES bots(id)
+
+name              text
+key_hash          text NOT NULL
+is_active         boolean DEFAULT true
+last_used_at      timestamptz
+created_at        timestamptz DEFAULT now()
+
+
+conversations_meta
+-------------
+id                   uuid PRIMARY KEY
+organization_id      uuid REFERENCES organizations(id)
+bot_id               uuid REFERENCES bots(id)
+api_key_id           uuid REFERENCES api_keys(id)
+
+user_name            text
+user_email           text
+
+status               text CHECK (
+  status IN ('connected','disconnected')
+)
+
+last_message_snippet text
+last_message_at      timestamptz
+created_at           timestamptz DEFAULT now()
+
+
+leads
+-----
+id                   uuid PRIMARY KEY
+organization_id      uuid REFERENCES organizations(id)
+bot_id               uuid REFERENCES bots(id)
+conversation_id      uuid REFERENCES conversations(id)
+
+name                 text
+email                text
+phone                text
+
+captured_at          timestamptz DEFAULT now()
+
+
+training_sources
+----------------
+id                   uuid PRIMARY KEY
+organization_id      uuid REFERENCES organizations(id)
+bot_id               uuid REFERENCES bots(id)
+
+type                 text CHECK (type IN ('url','file'))
+source_value         text
+
+status               text CHECK (
+  status IN ('pending','processing','completed','failed')
+)
+
+error_message        text
+created_at           timestamptz DEFAULT now()
+
+
+files
+-----
+id                   uuid PRIMARY KEY
+organization_id      uuid REFERENCES organizations(id)
+bot_id               uuid REFERENCES bots(id)
+
+provider             text DEFAULT 'supabase'
+bucket               text
+path                 text
+
+original_filename    text
+mime_type            text
+size_bytes           bigint
+
+purpose              text CHECK (
+  purpose IN ('profile','training','scraped')
+)
+
+status               text CHECK (
+  status IN ('uploaded','processing','processed','failed')
+)
+
+created_at           timestamptz DEFAULT now()
+
+

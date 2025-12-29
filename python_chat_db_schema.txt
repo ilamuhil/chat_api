@@ -1,0 +1,47 @@
+python chat db schema
+
+
+
+messages
+--------
+id                uuid PRIMARY KEY
+conversation_id   uuid
+role              text CHECK (role IN ('user','assistant','system'))
+content           text
+created_at        timestamptz DEFAULT now()
+
+
+
+documents
+---------
+id                uuid PRIMARY KEY
+organization_id   uuid
+bot_id            uuid
+source_id         uuid          -- training_sources.id
+chunk_index       integer
+content           text
+created_at        timestamptz DEFAULT now()
+
+
+
+
+embeddings (VECTOR STORE)
+----------
+id                uuid PRIMARY KEY
+document_id       uuid
+embedding         vector(1536)
+
+
+training_jobs
+-------------
+id                uuid PRIMARY KEY
+organization_id   uuid
+bot_id            uuid
+status            text CHECK (
+  status IN ('queued','running','completed','failed')
+)
+started_at        timestamptz
+completed_at      timestamptz
+
+
+
