@@ -1,0 +1,47 @@
+from fastapi import FastAPI,WebSocket, WebSocketDisconnect
+from fastapi.websockets import WebSocketRoute
+from auth import authenticate_socket
+from chat import send_to_support_agent, send_to_end_user, respond_with_ai
+from util import ChatSession
+app = FastAPI()
+
+
+ACTIVE_SESSIONS : dict[str,ChatSession] = {}
+
+
+@WebSocketRoute("/chat")
+async def chat(websocket:WebSocket):
+    await websocket.accept()
+    session = await authenticate_socket(websocket,ACTIVE_SESSIONS)
+    if session is None:
+        return
+    try:
+        while True:
+            message_data = await websocket.receive_json()
+            
+            # Condition -> when the end user is sending a message
+            if websocket == session.user_socket:
+                # Send message to live support agent
+                if session.mode == "human":
+                    await send_to_support_agent(message_data,session)
+                    
+                # Send message to end user with AI response   
+                elif session.mode == "ai":
+                    await respond_with_ai(message_data,session)
+            
+            # Condition -> when the live support agent is sending a message
+            elif websocket == session.agent_socket:
+                # Send message to end user
+                await send_to_end_user(message_data,session)
+                
+    except WebSocketDisconnect:
+        # Disconnect the user or agent from the session
+        if websocket == session.user_socket:
+            session.user_disconnect()
+        elif websocket == session.agent_socket:
+            session.agent_disconnect()
+        print("Client disconnected")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        await websocket.close()
