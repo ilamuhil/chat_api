@@ -1,9 +1,9 @@
-from sqlalchemy import create_engine, sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session
-from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 import os
-load_dotenv()
+from env_loader import load_app_env
+
+load_app_env()
 
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
@@ -19,6 +19,7 @@ DB_URL = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_
 engine = create_engine(DB_URL,echo=True,pool_size=10,max_overflow=20,pool_pre_ping=True)
 
 SessionLocal = sessionmaker(autocommit=False,autoflush=False,bind=engine)
+
 
 def get_db():
   db = SessionLocal()

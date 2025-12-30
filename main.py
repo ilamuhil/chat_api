@@ -1,3 +1,8 @@
+# Load env early (before importing modules that may read environment variables)
+from env_loader import load_app_env
+
+load_app_env()
+
 from fastapi import FastAPI,WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketRoute
 from auth import authenticate_socket

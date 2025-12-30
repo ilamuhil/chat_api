@@ -43,5 +43,3 @@ status            text CHECK (
 started_at        timestamptz
 completed_at      timestamptz
 
-
-
