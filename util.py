@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 from datetime import datetime, timezone
 from fastapi import WebSocket
@@ -36,10 +36,12 @@ class Message(BaseModel):
 
 
 class ChatSession(BaseModel):
+  model_config = ConfigDict(arbitrary_types_allowed=True)
   conversation_id:str = Field(min_length=1)
   organization_id:str = Field(min_length=1)
-  user_socket:WebSocket | None = None
-  agent_socket:WebSocket | None = None
+  # WebSocket objects are runtime-only (not JSON-serializable); exclude from dumps.
+  user_socket:WebSocket | None = Field(default=None, exclude=True)
+  agent_socket:WebSocket | None = Field(default=None, exclude=True)
   mode:Literal["ai", "human"] = Field(default="ai") 
   
   def agent_connect(self,websocket:WebSocket):
