@@ -33,7 +33,7 @@ UNIQUE (organization_id, user_id)
 
 bots
 ----
-id                       uuid PRIMARY KEY
+id                       integer PRIMARY KEY
 organization_id          uuid REFERENCES organizations(id)
 
 name                     text NOT NULL

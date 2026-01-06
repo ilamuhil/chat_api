@@ -26,23 +26,26 @@ def load_app_env() -> str:
         or "development"
     ).strip().lower()
 
-    root = Path(__file__).resolve().parent
+    # Project root (two levels up from app/core/env.py -> app -> project root)
+    root = Path(__file__).resolve().parents[2]
     env_path = root / ".env"
     env_local_path = root / ".env.local"
 
+    def _safe_load(path: Path, override: bool) -> None:
+        # In some environments (e.g. restricted sandboxes) dotfiles may not be readable.
+        try:
+            load_dotenv(dotenv_path=path, override=override)
+        except PermissionError:
+            return
+
     if app_env in ("prod", "production"):
-        # Production loads only `.env`
-        load_dotenv(dotenv_path=env_path, override=False)
+        _safe_load(env_path, override=False)
         return "production"
 
-    # Development loads `.env.local` (fallback to `.env` if `.env.local` is absent)
     if env_local_path.exists():
-        load_dotenv(dotenv_path=env_local_path, override=True)
+        _safe_load(env_local_path, override=True)
     else:
-        load_dotenv(dotenv_path=env_path, override=False)
+        _safe_load(env_path, override=False)
     return "development"
-
-
-
 
 

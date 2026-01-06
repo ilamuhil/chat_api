@@ -1,18 +1,30 @@
 import uuid
-from db import SessionLocal
-from models import Messages, Documents, Embeddings, TrainingJobs
 from datetime import datetime, timezone
 
-message  = Messages(id=uuid.uuid4(),conversation_id=uuid.uuid4(),created_at=datetime.now(timezone.utc),updated_at=datetime.now(timezone.utc),role="user",content="Hello, how are you?")
+from app.db.session import SessionLocal
+from app.models.python_chat import Messages
 
-database = None
-try:
-    database = SessionLocal()
-    database.add(message)
-    database.commit()
-    print("Message created successfully")
-except Exception as e:
-  print(f"Error: {e}")
-finally:
-  if database is not None:
-    database.close()
+
+def main() -> None:
+    if SessionLocal is None:
+        raise RuntimeError("DB is not configured. Set DB_* env vars before running this script.")
+
+    db = SessionLocal()
+    try:
+        msg = Messages(
+            id=uuid.uuid4(),
+            conversation_id=uuid.uuid4(),
+            role="user",
+            content="hello",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(msg)
+        db.commit()
+        print("Inserted message:", msg.id)
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    main()

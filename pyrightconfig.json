@@ -1,0 +1,9 @@
+{
+  "venvPath": ".",
+  "venv": "chat_env",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "pythonVersion": "3.12"
+}
+
+

@@ -64,6 +64,7 @@ env.bak/
 venv.bak/
 
 # Project virtual environment
+chat_env/
 chat_venv/
 
 # IDEs / editors
