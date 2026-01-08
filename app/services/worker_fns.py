@@ -162,9 +162,22 @@ def process_file_training_source(source: TrainingSources, sb_session: Session, p
       )
     )
   py_session.commit()
+  
+
+
+
+
 
 def process_training_job(job_id: str, bot_id: int, organization_id: str, source_ids: Sequence[str]) -> None:
-    # Update the training job status to processing and started_at to the current time
+    """
+    Main worker function that performs the following tasks:
+    1. Called by the RQ worker when a training job is enqueued.
+    2. Fetches the training job from the database, updates the status to 'processing' and 'started_at' to the current time.
+    3. Fetches the training sources from the database, processes each training source, and updates the status to 'completed' or 'failed'.
+    4. Updates the training job status to 'completed' or 'failed' and 'completed_at' to the current time.
+    5. Rolls back the database sessions if an error occurs.
+    6. Closes the database sessions.
+    """
     if SessionLocal is None or SupabaseSessionLocal is None:
         print("DB sessions are not configured (missing env vars).")
         return
