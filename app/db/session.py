@@ -58,14 +58,14 @@ SUPABASE_DB_URL: str | None = None
 supabase_engine = None
 SupabaseSessionLocal = None
 
-_supabase_keys = ["SUPABASE_DB_HOST", "SUPABASE_DB_PORT", "SUPABASE_DB_USER", "SUPABASE_DB_PASSWORD", "SUPABASE_DB_NAME"]
+_supabase_keys = ["SUPABASE_DB_HOST", "SUPABASE_DB_PORT", "SUPABASE_DB_USER", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_NAME"]
 if all(os.getenv(k) for k in _supabase_keys):
     SB = _require_env(_supabase_keys)
     SUPABASE_DB_URL = _build_url(
         SB["SUPABASE_DB_HOST"],
         SB["SUPABASE_DB_PORT"],
         SB["SUPABASE_DB_USER"],
-        SB["SUPABASE_DB_PASSWORD"],
+        SB["SUPABASE_SERVICE_ROLE_KEY"],
         SB["SUPABASE_DB_NAME"],
     )
     supabase_engine = create_engine(

@@ -348,7 +348,7 @@ class TrainingSources(Base):
     type: Mapped[Optional[str]] = mapped_column(Text)
     status: Mapped[Optional[str]] = mapped_column(Text)
     error_message: Mapped[Optional[str]] = mapped_column(Text)
-
+    source_value: Mapped[str] = mapped_column(Text)
     bot: Mapped[Optional["Bots"]] = relationship("Bots", back_populates="training_sources")
     organization: Mapped[Optional["Organizations"]] = relationship(
         "Organizations", back_populates="training_sources"
