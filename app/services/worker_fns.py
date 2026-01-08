@@ -116,7 +116,9 @@ def _loader_for_path(path: Path):
   raise ValueError(f"Unsupported file type: {ext}. Supported: .csv .md .pdf .txt")
 
 
-def process_file_training_source(source: TrainingSources, sb_session: Session, py_session: Session) -> None:
+def process_file_training_source(source: TrainingSources, sb_session: Session, py_session: Session,chunk_config: dict) -> None:
+  if chunk_config is None:
+    chunk_config = {"chunk_size": 800, "chunk_overlap": 100}
   if source.bot_id is None or source.organization_id is None:
     raise ValueError("Training source missing bot_id/organization_id")
 
@@ -147,7 +149,7 @@ def process_file_training_source(source: TrainingSources, sb_session: Session, p
   if len(cleaned) < 50:
     raise ValueError("File content too short after loading/cleaning")
 
-  splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+  splitter = RecursiveCharacterTextSplitter(chunk_size=int(chunk_config.get("chunk_size", 800)), chunk_overlap=int(chunk_config.get("chunk_overlap", 100)))
   chunks = splitter.split_text(cleaned)
   for i, chunk in enumerate(chunks):
     py_session.add(
@@ -188,7 +190,7 @@ def process_training_job(job_id: str, bot_id: int, organization_id: str, source_
               if source.type == "url":
                 process_url_training_source(source, sb_session, py_session)
               else:
-                process_file_training_source(source, sb_session, py_session)
+                process_file_training_source(source, sb_session, py_session,chunk_config={"chunk_size": 800, "chunk_overlap": 100})
               source.status = "completed"
               sb_session.commit()
               sb_session.refresh(source)
