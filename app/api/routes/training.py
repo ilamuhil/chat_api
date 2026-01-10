@@ -1,17 +1,19 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 import uuid
-
+import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from app.api.router import api_router
 from app.db.session import get_db, get_supabase_db
 from app.models.supabase import Bots, TrainingSources
 from app.models.python_chat import TrainingJobs
 from rq import Queue
 from app.infra.redis_client import redis_client
-from app.services.worker_fns import process_training_job
+from app.services.worker_fns import process_training_job, delete_training_source_job
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -31,7 +33,7 @@ async def queue_training(
         bot_id = int(bot_id)
     elif not isinstance(bot_id, int):
         return JSONResponse(content={"error": "Invalid bot ID"}, status_code=400)
-    
+
     source_ids = data.get("source_ids", [])
     if not source_ids:
         return JSONResponse(content={"error": "Source IDs are required"}, status_code=400)
@@ -64,7 +66,7 @@ async def queue_training(
         return JSONResponse(content={"error": f"Failed to fetch training sources: {e}"}, status_code=500)
     if len(sources) != len(source_ids):
         return JSONResponse(content={"error": "Invalid training source IDs are provided"}, status_code=400)
-    
+
     # * The training sources table from supabase and the training jobs table from python_chat are linked by the bot_id.
     try:
         job = TrainingJobs(
@@ -79,14 +81,39 @@ async def queue_training(
 
         queue = Queue(connection=redis_client)
         # Pass only primitives to the job (RQ pickles args/kwargs).
-        queue.enqueue(process_training_job, str(job.id), bot_id, organization_id, source_ids)
+        queue.enqueue(process_training_job, str(job.id),
+                      bot_id, organization_id, source_ids)
     except Exception as e:
         print(f"Failed to queue training: {e}")
         db.rollback()
         return JSONResponse(content={"error": f"Failed to queue training: {e}"}, status_code=500)
-    
+
     return JSONResponse(content={"message": "Training queued"}, status_code=200)
-    
-    
 
 
+@api_router.delete('/api/training/delete/{source_id}')
+async def delete_training_source(request: Request, db: Session = Depends(get_db)):
+    claims: dict = request.state.claims
+    source_id = request.path_params.get("source_id")
+    if not source_id:
+        logger.error("Invalid Training Source ID",
+                     extra={"source_id": source_id})
+        return JSONResponse(content={"error": "Invalid Training Source Provided"}, status_code=400)
+    try:
+        job = TrainingJobs(
+            id=uuid.uuid4(),
+            organization_id=claims.get("organization_id"),
+            bot_id=claims.get("bot_id"),
+            status="queued"
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+    except Exception as e:
+        logger.critical("Failed to queue deletion workflow job",
+                        extra={"error": str(e)})
+        return JSONResponse(content={"error": f"Failed to queue deletion workflow job: {e}"}, status_code=500)
+    queue = Queue(connection=redis_client)
+    queue.enqueue(delete_training_source_job, source_id, str(
+        job.id), claims.get("organization_id"), claims.get("bot_id"))
+    return JSONResponse(content={"message": "Deletion workflow queued", "job_id": str(job.id)}, status_code=200)

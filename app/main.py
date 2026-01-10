@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+import os
+from logging_config import setup_logging
 from app.api.middleware.jwt import verify_jwt_middleware
 from app.api.router import api_router
 from app.core.env import load_app_env
+import logging
 
-
-# Load env early (before importing modules that may read environment variables)
+# load env and setup logging configuration
 load_app_env()
+setup_logging()
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -28,5 +33,4 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-
-
+logger.info("App started", extra={"app_env": os.getenv("APP_ENV")})

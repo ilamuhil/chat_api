@@ -1,3 +1,4 @@
+from traceback import print_exception
 from bs4 import BeautifulSoup
 import re
 import unicodedata
@@ -40,10 +41,8 @@ def extract_main_text_from_html(html: str) -> str:
     root = soup.find("main") or soup.find("article") or soup.body or soup
     text = root.get_text("\n")
     return text.strip()
-  
-  
-  
-  
+
+
 def clean_scraped_text(text: str) -> str:
     # normalize unicode + newlines
     text = unicodedata.normalize("NFKC", text)
@@ -53,9 +52,11 @@ def clean_scraped_text(text: str) -> str:
     text = text.replace("\u200b", "").replace("\ufeff", "")
 
     # collapse whitespace
-    text = re.sub(r"[ \t]+", " ", text)      # tabs/multiple spaces -> single space
+    # tabs/multiple spaces -> single space
+    text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n[ \t]+", "\n", text)   # trim line-leading spaces
-    text = re.sub(r"\n{3,}", "\n\n", text)   # many blank lines -> max 1 blank line
+    # many blank lines -> max 1 blank line
+    text = re.sub(r"\n{3,}", "\n\n", text)
 
     # drop very short/noisy lines (nav/cookie fragments)
     lines = []
@@ -72,57 +73,58 @@ def clean_scraped_text(text: str) -> str:
 
     cleaned = "\n".join(lines)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned  
+    return cleaned
 
 
+def delete_file_from_storage(bucket: str, path: str):
+    """
+    Delete a file from supabase storage bucket at given bucket path
+    """
+    base_url = os.getenv(
+        "SUPABASE_BASE_URL")  # e.g. https://<project-ref>.supabase.co
+    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not all([base_url, service_key]):
+        raise ValueError(
+            "SUPABASE_BASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set")
 
+    url = f"{base_url}/storage/v1/object/{bucket}"
+    headers = {
+        "Authorization": f"Bearer {service_key}",
+        "Content-Type": "application/json",
+    }
+    with httpx.Client(timeout=30) as client:
+        response = client.post(url, headers=headers, json={
+                               "paths": [path]}, timeout=30)
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Failed to delete file from storage: {response.status_code} {response.text}")
+        return True  # success
 
 
 def get_signed_file_url(bucket: str, path: str, expires_in: int = 3600) -> str:
     """
     Create a signed URL for a private storage object (no DB calls).
-
-    Matches Storage API:
-      POST /storage/v1/object/sign/{bucketName}
-      body: { "expiresIn": <int>, "paths": [<path>] }
     """
-    base_url = os.getenv("SUPABASE_BASE_URL")  # e.g. https://<project-ref>.supabase.co
+    base_url = os.getenv(
+        "SUPABASE_BASE_URL")  # e.g. https://<project-ref>.supabase.co
     service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    if not base_url:
-        raise ValueError("SUPABASE_BASE_URL is not set")
-    if not service_key:
-        raise ValueError("SUPABASE_SERVICE_ROLE_KEY is not set")
-
-    if not bucket or not path:
-        raise ValueError("bucket and path are required to sign a URL")
-
-    url = f"{base_url}/storage/v1/object/sign/{bucket}"
+    if not all([base_url, service_key]):
+        raise ValueError(
+            "SUPABASE_BASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set")
+    url = f"{base_url}/storage/v1/object/sign/{bucket}/{path}"
     headers = {
         "Authorization": f"Bearer {service_key}",
-        "apikey": service_key,  # commonly required by Supabase APIs
         "Content-Type": "application/json",
     }
-
     payload = {"expiresIn": int(expires_in), "paths": [path]}
-    resp = httpx.post(url, headers=headers, json=payload, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-
-    # Response shape is typically a list of objects: [{ "path": "...", "signedURL": "...", "error": ... }]
-    signed: str | None = None
-    if isinstance(data, list) and data:
-        first = data[0]
-        if isinstance(first, dict) and first.get("error"):
-            raise ValueError(f"Storage sign error: {first.get('error')}")
-        if isinstance(first, dict):
-            signed = first.get("signedURL") or first.get("signedUrl")
-    elif isinstance(data, dict):
-        signed = data.get("signedURL") or data.get("signedUrl")
-
+    with httpx.Client(timeout=30) as client:
+        response = client.post(url, headers=headers, json=payload, timeout=30)
+        if response.status_code >= 400:
+            raise ValueError(
+                f"Failed to get signed URL: {response.status_code} {response.text}")
+        data = response.json()
+    signed = data.get("signedURL", None)
     if not signed or not isinstance(signed, str):
-        raise ValueError(f"Unexpected response from Storage sign endpoint: {data}")
-
-    # Some responses are relative paths; normalize to absolute
-    if signed.startswith("/"):
-        return f"{base_url}{signed}"
+        print(signed)
+        raise ValueError(f"Failed to get signedURL: Unknown Error")
     return signed
