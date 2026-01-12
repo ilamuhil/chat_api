@@ -147,9 +147,9 @@ chat_api/
 ├── docker-compose.yml             # Docker Compose configuration
 ├── Dockerfile                     # Docker image definition
 ├── public.pem                     # JWT public key (RS256)
-├── python_chat_db_schema.txt      # Local database schema documentation
-├── requirements.txt               # Python dependencies
-└── README.md                       # This file
+├── python_chat_db_schema.txt      # Schema of postgres database managed by python server
+├── chat_db_schema.txt             # Schema of postgres database managed by Supabase (Connected via python and nextjs server)
+└── requirements.txt               # Python dependencies
 ```
 
 ### Directory Descriptions
