@@ -5,7 +5,6 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from app.api.router import api_router
 from app.db.session import get_db, get_supabase_db
 from app.models.supabase import Bots, TrainingSources
 from app.models.python_chat import TrainingJobs
@@ -91,7 +90,7 @@ async def queue_training(
     return JSONResponse(content={"message": "Training queued"}, status_code=200)
 
 
-@api_router.delete('/api/training/delete/{source_id}')
+@router.delete('/api/training/delete/{source_id}')
 async def delete_training_source(request: Request, db: Session = Depends(get_db)):
     claims: dict = request.state.claims
     source_id = request.path_params.get("source_id")

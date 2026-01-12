@@ -1,0 +1,54 @@
+# Virtual environment
+chat_env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Logs
+logs/
+*.log
+
+# Build files
+Dockerfile
+.dockerignore
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Type checking
+pyrightconfig.json
+mypy.ini
+.pytype/
+
+# Documentation/schema files
+*.txt
+*.md
+!requirements.txt
+
+# Git
+.git/
+.gitignore
+
+# Environment files (use secrets/env vars instead)
+.env
+.env.local
+.env.*.local
+
+# Alembic migrations (if you have them)
+# alembic/versions/*.pyc
+
+# Test files
+tests/
+*_test.py
+*_test_*.py
+
+# Other
+.DS_Store

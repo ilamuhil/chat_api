@@ -1,0 +1,27 @@
+services:
+  api:
+    build: . # Tell docker-compose file how to build the image for the api service. '.' is the location of the Dockerfile. It will use the Dockerfile in the current directory to build the image.
+    env_file: .env.local
+    ports:
+      - 8000:8000
+    volumes:
+      - .:/code
+    working_dir: /code
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      - redis
+  workers:
+    build: .
+    env_file: .env.local
+    command: rq worker default
+    depends_on: 
+      - redis
+  redis:
+    image: redis:7
+    ports: # remove this later. Redis image already has a port mapped. Used for debugging and local development.
+      - 6379:6379 
+    volumes:
+      - redis-data:/data # 
+
+volumes:
+  redis-data:

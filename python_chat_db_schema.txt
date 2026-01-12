@@ -1,45 +1,91 @@
 python chat db schema
 
 
-
 messages
 --------
 id                uuid PRIMARY KEY
-conversation_id   uuid
-role              text CHECK (role IN ('user','assistant','system'))
+conversation_id   uuid NOT NULL
+role              text
 content           text
-created_at        timestamptz DEFAULT now()
-
+created_at        timestamptz NOT NULL DEFAULT now()
+updated_at        timestamptz NOT NULL
 
 
 documents
 ---------
-id                uuid PRIMARY KEY
-organization_id   uuid
-bot_id            uuid
-source_id         uuid          -- training_sources.id
-chunk_index       integer
+id                uuid PRIMARY KEY DEFAULT gen_random_uuid()
+organization_id   text NOT NULL
+bot_id            bigint NOT NULL
+source_id         uuid NOT NULL          -- training_sources.id
+chunk_index       integer NOT NULL
 content           text
 created_at        timestamptz DEFAULT now()
-
-
+chunk_size        integer
+chunk_overlap     integer
+section_title     text
+token_count       integer
+embedding_model   text
+embedding_version text
+is_active         boolean DEFAULT true
 
 
 embeddings (VECTOR STORE)
 ----------
-id                uuid PRIMARY KEY
-document_id       uuid
-embedding         vector(1536)
+id                uuid PRIMARY KEY DEFAULT gen_random_uuid()
+document_id       uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE
+embedding         vector(1536) NOT NULL
+created_at        timestamptz NOT NULL DEFAULT now()
+
+INDEX: embeddings_document_id_idx ON document_id
 
 
 training_jobs
 -------------
 id                uuid PRIMARY KEY
-organization_id   uuid
-bot_id            uuid
-status            text CHECK (
-  status IN ('queued','running','completed','failed')
-)
+organization_id   text NOT NULL
+bot_id            bigint NOT NULL
+status            text NOT NULL            -- queued, processing, completed, failed, cleanup_completed
 started_at        timestamptz
 completed_at      timestamptz
 
+
+retrieval_logs
+--------------
+id                    uuid PRIMARY KEY
+organization_id       uuid
+bot_id                uuid
+conversation_id       uuid
+message_id            uuid
+query                 text
+query_embedding       vector(1536)
+retrieved_document_ids uuid[]
+similarity_scores     double precision[]
+retrieval_threshold   double precision
+retrieval_k           integer
+reranker_used         boolean
+reranked_document_ids uuid[]
+created_at            timestamptz DEFAULT now()
+
+
+message_feedback
+----------------
+id                uuid PRIMARY KEY
+message_id        uuid REFERENCES messages(id)
+feedback          text CHECK (feedback IN ('positive', 'negative'))
+reason            text
+created_at        timestamptz DEFAULT now()
+
+
+model_config_versions
+---------------------
+id                    uuid PRIMARY KEY
+bot_id                uuid
+embedding_model       text
+llm_model             text
+reranker_model        text
+retrieval_k           integer
+similarity_threshold  double precision
+chunk_size            integer
+chunk_overlap         integer
+active                boolean DEFAULT false
+created_at            timestamptz DEFAULT now()

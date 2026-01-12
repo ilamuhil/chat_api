@@ -60,15 +60,16 @@ propcache==0.4.1
 psycopg==3.3.2
 psycopg-binary==3.3.2
 psycopg-pool==3.3.0
-pypdf==6.1.1
 pydantic==2.12.5
 pydantic-extra-types==2.10.6
 pydantic-settings==2.12.0
 pydantic_core==2.41.5
 Pygments==2.19.2
 PyJWT==2.10.1
+pypdf==6.1.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
+python-json-logger==4.0.0
 python-multipart==0.0.21
 pytz==2025.2
 PyYAML==6.0.3
