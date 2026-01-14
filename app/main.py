@@ -12,9 +12,9 @@ import logging
 # load env and setup logging configuration
 load_app_env()
 setup_logging()
-
-
 logger = logging.getLogger(__name__)
+
+logger.info("Logger and env setup complete. Loading Environment", extra={"app_env": os.getenv("APP_ENV")})
 
 
 def create_app() -> FastAPI:
@@ -33,5 +33,5 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-logger.info("App started", extra={"app_env": os.getenv("APP_ENV")})
+logger.info("Fast API App started Successfully")
 

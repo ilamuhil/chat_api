@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+#Chat database maintained by the python chat server.
+
 import datetime
 import uuid
 from typing import Optional

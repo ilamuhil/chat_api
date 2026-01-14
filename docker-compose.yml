@@ -2,12 +2,34 @@ services:
   api:
     build: . # Tell docker-compose file how to build the image for the api service. '.' is the location of the Dockerfile. It will use the Dockerfile in the current directory to build the image.
     env_file: .env.local
+    develop:
+      watch:
+        - action: sync
+          path: ./app
+          target: /code/app
+          ignore: 
+            - "**/*.pyc"
+            - "**/__pycache__"
+            - "**/*.log"
+            - "**/*.json"
+            - "**/*.txt"
+            - "**/*.md"
+            - "**/*.yaml"
+            - "**/*.yml"
+            - "**/*.ini"
+        # Rebuild image when dependencies/container definition change
+        - action: restart
+          path: ./.env.local
+        - action: rebuild
+          path: ./Dockerfile
+        - action: rebuild
+          path: ./requirements.txt
     ports:
       - 8000:8000
     volumes:
       - .:/code
     working_dir: /code
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
     depends_on:
       - redis
   workers:
