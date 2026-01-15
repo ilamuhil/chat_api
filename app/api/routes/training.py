@@ -23,71 +23,129 @@ async def queue_training(
     db: Session = Depends(get_db),
     supabase_db: Session = Depends(get_supabase_db),
 ):
-
     claims = request.state.claims
     organization_id = claims.get("organization_id")
+
     data = await request.json()
     bot_id = data.get("bot_id")
+
+    # bot_id is INTEGER (as clarified)
     if isinstance(bot_id, str):
-        bot_id = int(bot_id)
+        try:
+            bot_id = int(bot_id)
+        except ValueError:
+            return JSONResponse({"error": "Invalid bot ID"}, status_code=400)
     elif not isinstance(bot_id, int):
-        return JSONResponse(content={"error": "Invalid bot ID"}, status_code=400)
+        return JSONResponse({"error": "Invalid bot ID"}, status_code=400)
 
     source_ids = data.get("source_ids", [])
-    if not source_ids:
-        return JSONResponse(content={"error": "Source IDs are required"}, status_code=400)
+    if not source_ids or not isinstance(source_ids, list):
+        return JSONResponse({"error": "Source IDs are required"}, status_code=400)
 
     for source_id in source_ids:
         if not isinstance(source_id, str):
-            return JSONResponse(content={"error": "Invalid source ID"}, status_code=400)
+            return JSONResponse({"error": "Invalid source ID"}, status_code=400)
 
-    try:
-        bot = (
-            supabase_db.query(Bots)
-            .filter(Bots.id == bot_id, Bots.organization_id == organization_id)
-            .first()
+    # ---- Validate bot ownership ----
+    bot = (
+        supabase_db.query(Bots)
+        .filter(
+            Bots.id == bot_id,
+            Bots.organization_id == organization_id,
         )
-    except Exception as e:
-        # Read-only query, but keep a consistent API error response.
-        supabase_db.rollback()
-        return JSONResponse(content={"error": f"Failed to fetch bot: {e}"}, status_code=500)
+        .first()
+    )
     if not bot:
-        return JSONResponse(content={"error": "Bot not found"}, status_code=404)
+        return JSONResponse({"error": "Bot not found"}, status_code=404)
 
-    try:
-        sources = (
-            supabase_db.query(TrainingSources)
-            .filter(TrainingSources.id.in_(source_ids), TrainingSources.bot_id == bot_id)
-            .all()
+    # ---- Concurrency guard (Python-side authority) ----
+    existing_job = (
+        db.query(TrainingJobs)
+        .filter(
+            TrainingJobs.bot_id == bot_id,
+            TrainingJobs.status.in_(["queued", "running"]),
         )
-    except Exception as e:
-        supabase_db.rollback()
-        return JSONResponse(content={"error": f"Failed to fetch training sources: {e}"}, status_code=500)
-    if len(sources) != len(source_ids):
-        return JSONResponse(content={"error": "Invalid training source IDs are provided"}, status_code=400)
+        .first()
+    )
+    if existing_job:
+        return JSONResponse(
+            {"error": "Training already in progress for this bot"},
+            status_code=409,
+        )
 
-    # * The training sources table from supabase and the training jobs table from python_chat are linked by the bot_id.
+    # ---- Validate training sources (must be pending) ----
+    sources = (
+        supabase_db.query(TrainingSources)
+        .filter(
+            TrainingSources.id.in_(source_ids),
+            TrainingSources.bot_id == bot_id,
+            TrainingSources.status == "pending",
+        )
+        .all()
+    )
+
+    if len(sources) != len(source_ids):
+        return JSONResponse(
+            {"error": "Invalid or non-pending training source IDs"},
+            status_code=400,
+        )
+
+    # ---- Create training job ----
     try:
         job = TrainingJobs(
             id=uuid.uuid4(),
             organization_id=organization_id,
             bot_id=bot_id,
-            status="queued"
+            status="queued",
         )
         db.add(job)
         db.commit()
         db.refresh(job)
 
-        queue = Queue(connection=redis_client)
-        # Pass only primitives to the job (RQ pickles args/kwargs).
-        queue.enqueue(process_training_job, str(job.id),
-                      bot_id, organization_id, source_ids)
-    except Exception as e:
-        print(f"Failed to queue training: {e}")
-        db.rollback()
-        return JSONResponse(content={"error": f"Failed to queue training: {e}"}, status_code=500)
+        # ---- Enqueue Redis job ----
+        try:
+            queue = Queue(connection=redis_client)
+            queue.enqueue(
+                process_training_job,
+                str(job.id),
+                bot_id,
+                organization_id,
+                source_ids,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to enqueue Redis job",
+                extra={"job_id": str(job.id), "error": str(e)},
+            )
+            job.status = "failed"
+            job.completed_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(job)
+            return JSONResponse(
+                {"error": "Failed to enqueue training job"},
+                status_code=500,
+            )
 
-    return JSONResponse(content={"message": "Training queued"}, status_code=200)
+    except Exception as e:
+        logger.error(
+            "Failed to queue training",
+            extra={"bot_id": bot_id, "error": str(e)},
+        )
+        db.rollback()
+        return JSONResponse(
+            {"error": "Failed to queue training"},
+            status_code=500,
+        )
+
+    return JSONResponse(
+        {
+            "message": "Training queued",
+            "job_id": str(job.id),
+            "source_count": len(source_ids),
+        },
+        status_code=200,
+    )
+
 
 
 @router.delete('/api/training/delete/{source_id}')

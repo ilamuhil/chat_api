@@ -186,73 +186,118 @@ def process_file_training_source(source: TrainingSources, sb_session: Session, p
         py_session.commit()
 
 
-def process_training_job(job_id: str, bot_id: int, organization_id: str, source_ids: Sequence[str]) -> None:
-    """
-    Main worker function that performs the following tasks:
-    1. Called by the RQ worker when a training job is enqueued.
-    2. Fetches the training job from the database, updates the status to 'processing' and 'started_at' to the current time.
-    3. Fetches the training sources from the database, processes each training source, and updates the status to 'completed' or 'failed'.
-    4. Updates the training job status to 'completed' or 'failed' and 'completed_at' to the current time.
-    5. Rolls back the database sessions if an error occurs.
-    6. Closes the database sessions.
-    """
+def process_training_job(
+    job_id: str,
+    bot_id: int,
+    organization_id: str,
+    source_ids: Sequence[str],
+) -> None:
     if SessionLocal is None or SupabaseSessionLocal is None:
-        logger.critical("Database session not Configured")
+        logger.critical("Database sessions not configured")
         return
 
-    py_session = SessionLocal()  # connects to the python_chat database
-    sb_session = SupabaseSessionLocal()  # connects to the supabase database
+    py_session = SessionLocal()
+    sb_session = SupabaseSessionLocal()
+
     job = None
+    any_failed = False
+
     try:
         job_uuid = uuid.UUID(job_id)
-        job = py_session.scalars(select(TrainingJobs).where(
-            TrainingJobs.id == job_uuid)).one()
+
+        # ---- Load job ----
+        job = py_session.scalars(
+            select(TrainingJobs).where(TrainingJobs.id == job_uuid)
+        ).one()
+
         job.status = "processing"
         job.started_at = datetime.now(timezone.utc)
         py_session.commit()
-        py_session.refresh(job)
 
-        # Fetch the training sources from the database
+        # ---- Load sources (scoped) ----
         source_uuids = [uuid.UUID(sid) for sid in source_ids]
-        sources = sb_session.scalars(select(TrainingSources).where(
-            TrainingSources.id.in_(source_uuids))).all()
+
+        sources = sb_session.scalars(
+            select(TrainingSources).where(
+                TrainingSources.id.in_(source_uuids),
+                TrainingSources.bot_id == bot_id,
+                TrainingSources.organization_id == organization_id,
+            )
+        ).all()
 
         for source in sources:
-            source.status = "processing"
-            print(f"Processing training source: {source.id}")
+            # ---- Idempotency guard ----
+            if source.status != "pending":
+                logger.info(
+                    "Skipping already processed source",
+                    extra={"job_id": job_id, "source_id": str(source.id)},
+                )
+                continue
+
             try:
+                # ---- Mark source processing ----
+                source.status = "processing"
+                sb_session.commit()
+
+                logger.info(
+                    "Processing training source",
+                    extra={"job_id": job_id, "source_id": str(source.id)},
+                )
+
                 if source.type == "url":
                     process_url_training_source(source, sb_session, py_session)
                 else:
-                    process_file_training_source(source, sb_session, py_session, chunk_config={
-                                                 "chunk_size": 800, "chunk_overlap": 100})
+                    process_file_training_source(
+                        source,
+                        sb_session,
+                        py_session,
+                        chunk_config={"chunk_size": 800, "chunk_overlap": 100},
+                    )
+
                 source.status = "completed"
                 sb_session.commit()
-                sb_session.refresh(source)
+
             except Exception as e:
-                print(f"Failed to process training source: {e}")
+                any_failed = True
+                logger.error(
+                    "Failed to process training source",
+                    extra={
+                        "job_id": job_id,
+                        "source_id": str(source.id),
+                        "error": str(e),
+                    },
+                )
+                sb_session.rollback()
                 source.status = "failed"
                 source.error_message = str(e)
                 sb_session.commit()
-                sb_session.refresh(source)
 
-        job.status = "completed"
+        # ---- Final job status ----
+        job.status = "failed" if any_failed else "completed"
         job.completed_at = datetime.now(timezone.utc)
         py_session.commit()
-        py_session.refresh(job)
-        print(f"Training job completed: {job_id}")
+
+        logger.info(
+            "Training job finished",
+            extra={"job_id": job_id, "status": job.status},
+        )
+
     except Exception as e:
-        print(f"Training job failed: {e}")
+        logger.exception(
+            "Training job crashed",
+            extra={"job_id": job_id, "error": str(e)},
+        )
         py_session.rollback()
         sb_session.rollback()
+
         if job is not None:
             try:
                 job.status = "failed"
                 job.completed_at = datetime.now(timezone.utc)
                 py_session.commit()
             except Exception:
-                print(f"Failed to update training job status: {e}")
                 py_session.rollback()
+
     finally:
         sb_session.close()
         py_session.close()

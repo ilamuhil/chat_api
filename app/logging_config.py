@@ -44,4 +44,5 @@ LOGGING_CONFIG = {
 
 
 def setup_logging():
+    os.makedirs("logs", exist_ok=True)
     logging.config.dictConfig(LOGGING_CONFIG)
