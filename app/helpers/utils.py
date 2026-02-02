@@ -2,8 +2,12 @@ from traceback import print_exception
 from bs4 import BeautifulSoup
 import re
 import unicodedata
-import os
-import httpx
+
+from app.infra.r2_storage import (
+    r2_delete_object,
+    r2_object_exists,
+    r2_presigned_get_url,
+)
 
 
 def extract_main_text_from_html(html: str) -> str:
@@ -76,55 +80,19 @@ def clean_scraped_text(text: str) -> str:
     return cleaned
 
 
-def delete_file_from_storage(bucket: str, path: str):
+def delete_file_from_storage(bucket: str, path: str) -> bool:
     """
-    Delete a file from supabase storage bucket at given bucket path
+    Delete a file from Cloudflare R2 (S3-compatible) at bucket/key.
     """
-    base_url = os.getenv(
-        "SUPABASE_BASE_URL")  # e.g. https://<project-ref>.supabase.co
-    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    if not all([base_url, service_key]):
-        raise ValueError(
-            "SUPABASE_BASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set")
-
-    url = f"{base_url}/storage/v1/object/{bucket}"
-    headers = {
-        "Authorization": f"Bearer {service_key}",
-        "Content-Type": "application/json",
-    }
-    with httpx.Client(timeout=30) as client:
-        response = client.post(url, headers=headers, json={
-                               "paths": [path]}, timeout=30)
-        if response.status_code >= 400:
-            raise RuntimeError(
-                f"Failed to delete file from storage: {response.status_code} {response.text}")
-        return True  # success
+    # Idempotent behavior: treat missing objects as "already deleted".
+    if not r2_object_exists(bucket, path):
+        return True
+    r2_delete_object(bucket, path)
+    return True
 
 
 def get_signed_file_url(bucket: str, path: str, expires_in: int = 3600) -> str:
     """
-    Create a signed URL for a private storage object (no DB calls).
+    Create a signed URL for a private R2 object (no DB calls).
     """
-    base_url = os.getenv(
-        "SUPABASE_BASE_URL")  # e.g. https://<project-ref>.supabase.co
-    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    if not all([base_url, service_key]):
-        raise ValueError(
-            "SUPABASE_BASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set")
-    url = f"{base_url}/storage/v1/object/sign/{bucket}/{path}"
-    headers = {
-        "Authorization": f"Bearer {service_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {"expiresIn": int(expires_in), "paths": [path]}
-    with httpx.Client(timeout=30) as client:
-        response = client.post(url, headers=headers, json=payload, timeout=30)
-        if response.status_code >= 400:
-            raise ValueError(
-                f"Failed to get signed URL: {response.status_code} {response.text}")
-        data = response.json()
-    signed = data.get("signedURL", None)
-    if not signed or not isinstance(signed, str):
-        print(signed)
-        raise ValueError(f"Failed to get signedURL: Unknown Error")
-    return signed
+    return r2_presigned_get_url(bucket, path, expires_in=expires_in)

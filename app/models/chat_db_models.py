@@ -38,7 +38,7 @@ class Documents(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, server_default=text('gen_random_uuid()'))
     organization_id: Mapped[str] = mapped_column(Text, nullable=False)
-    bot_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    bot_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     source_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[Optional[str]] = mapped_column(Text)
@@ -79,7 +79,7 @@ class TrainingJobs(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     organization_id: Mapped[str] = mapped_column(Text, nullable=False)
-    bot_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    bot_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     # queued, processing, completed, failed, cleanup_completed
     status: Mapped[str] = mapped_column(Text, nullable=False)
     started_at: Mapped[Optional[datetime.datetime]

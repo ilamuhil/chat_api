@@ -1,6 +1,6 @@
 # Chat API
 
-A FastAPI-based chat application with RAG (Retrieval-Augmented Generation) capabilities, supporting real-time WebSocket communication, background job processing with Redis Queue (RQ), and integration with Supabase for data storage.
+A FastAPI-based chat application with RAG (Retrieval-Augmented Generation) capabilities, supporting real-time WebSocket communication, background job processing with Redis Queue (RQ), and a PostgreSQL backend (Neon).
 
 ## Features
 
@@ -8,8 +8,8 @@ A FastAPI-based chat application with RAG (Retrieval-Augmented Generation) capab
 - **JWT Authentication** for secure API access
 - **Background Job Processing** using Redis Queue (RQ)
 - **RAG Pipeline** for document ingestion and retrieval
-- **Supabase Integration** for user management and data storage
-- **PostgreSQL** databases (local Python chat DB and Supabase)
+- **PostgreSQL (Neon)** for application data storage
+- **Cloudflare R2** (S3-compatible) for file storage
 - **Docker** support for easy deployment
 
 ## Prerequisites
@@ -89,19 +89,22 @@ Create a `.env.local` file (or `.env` for production) with the following variabl
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `APP_ENV` | Application environment | `development` or `production` |
-| `DB_USER` | Local PostgreSQL database user | `postgres` |
-| `DB_PASSWORD` | Local PostgreSQL database password | `your_password` |
-| `DB_HOST` | Local PostgreSQL database host | `localhost` |
-| `DB_PORT` | Local PostgreSQL database port | `5432` |
-| `DB_NAME` | Local PostgreSQL database name | `python_chat` |
+| `DASHBOARD_DB_HOST` | Dashboard DB host | `your-rds.amazonaws.com` |
+| `DASHBOARD_DB_PORT` | Dashboard DB port | `5432` |
+| `DASHBOARD_DB_USERNAME` | Dashboard DB username | `postgres` |
+| `DASHBOARD_DB_PASSWORD` | Dashboard DB password | `********` |
+| `DASHBOARD_DB_NAME` | Dashboard DB database name | `postgres` |
+| `PYTHON_CHAT_DB_HOST` | Neon host | `ep-...neon.tech` |
+| `PYTHON_CHAT_DB_PORT` | Neon port | `5432` |
+| `PYTHON_CHAT_DB_USERNAME` | Neon username | `neondb_owner` |
+| `PYTHON_CHAT_DB_PASSWORD` | Neon password | `********` |
+| `PYTHON_CHAT_DB_NAME` | Neon database name | `neondb` |
 | `OPENAI_API_KEY` | OpenAI API key for LLM responses | `sk-...` |
-| `SUPABASE_DB_USER` | Supabase database user | `postgres` |
-| `SUPABASE_DB_PASSWORD` | Supabase database password | `your_password` |
-| `SUPABASE_DB_HOST` | Supabase database host | `db.xxx.supabase.co` |
-| `SUPABASE_DB_PORT` | Supabase database port | `5432` or `6543` (pooler) |
-| `SUPABASE_DB_NAME` | Supabase database name | `postgres` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key | `eyJ...` |
-| `SUPABASE_BASE_URL` | Supabase project URL | `https://xxx.supabase.co` |
+| `R2_ACCOUNT_ID` | Cloudflare account id for R2 S3 endpoint | `xxxxxxxxxxxxxxxxxxxx` |
+| `ACCESS_KEY_ID` | R2 access key id | `xxxxxxxx` |
+| `SECRET_ACCESS_KEY` | R2 secret access key | `xxxxxxxx` |
+| `CLOUDFLARE_R2_BASE_URL` | (Optional) public base URL for objects | `https://pub-....r2.dev` |
+| `R2_API_KEY_TOKEN` | (Optional) Cloudflare API token (not used by S3 client) | `xxxxxxxx` |
 | `USER_AGENT` | User agent for HTTP requests | `Mozilla/5.0 (compatible; ChatAPI/1.0)` |
 | `LOG_LEVEL` | Logging level | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `REDIS_URL` | Redis connection URL | `redis://redis:6379/0` (Docker) or `redis://localhost:6379/0` (local) |
@@ -128,12 +131,13 @@ chat_api/
 │   ├── domain/                   # Domain models (Pydantic)
 │   │   └── chat.py              # Chat session models
 │   ├── helpers/                  # Helper utilities
-│   │   └── utils.py             # Text cleaning, Supabase Storage helpers
+│   │   └── utils.py             # Text cleaning, R2 storage helpers
 │   ├── infra/                     # Infrastructure
-│   │   └── redis_client.py      # Redis client configuration
+│   │   ├── redis_client.py      # Redis client configuration
+│   │   └── r2_storage.py        # Cloudflare R2 (S3) client helpers
 │   ├── models/                    # SQLAlchemy ORM models
-│   │   ├── python_chat.py      # Local Python chat database models
-│   │   └── supabase.py          # Supabase database models
+│   │   ├── chat_db_models.py      # Local Python chat database models
+│   │   └── dashboard_db_models.py            # Public schema models (users/orgs/bots/files/etc.)
 │   ├── services/                  # Business logic
 │   │   ├── chat.py              # Chat message handling
 │   │   └── worker_fns.py       # Background job functions (URL/file processing)
@@ -148,7 +152,7 @@ chat_api/
 ├── Dockerfile                     # Docker image definition
 ├── public.pem                     # JWT public key (RS256)
 ├── python_chat_db_schema.txt      # Schema of postgres database managed by python server
-├── chat_db_schema.txt             # Schema of postgres database managed by Supabase (Connected via python and nextjs server)
+├── dashboard_db_schema.txt             # Dashboard Database Schema reference
 └── requirements.txt               # Python dependencies
 ```
 
@@ -226,14 +230,14 @@ rq worker default
 ### Python Chat Database (`python_chat_db_schema.txt`)
 Local PostgreSQL database for chat messages, documents, embeddings, and training jobs. See `python_chat_db_schema.txt` for the complete schema.
 
-### Supabase Database
-Remote Supabase database for user management, organizations, bots, training sources, and files. Models are defined in `app/models/supabase.py`.
+### Public Schema (Neon / Postgres)
+Application tables for users, organizations, bots, API keys, training sources, files, and conversations. Models are defined in `app/models/public.py`.
 
 ## Logging
 
 Logs are written to:
 - **Console**: Pretty-printed JSON format (development)
-- **File**: `logs/app.json` - Compact JSON format (for log aggregation)
+- **File**: `logs/app.log` - Timed rotating log file
 
 Log level is controlled by the `LOG_LEVEL` environment variable.
 
@@ -241,10 +245,9 @@ Log level is controlled by the `LOG_LEVEL` environment variable.
 
 1. Set `APP_ENV=production` in your environment
 2. Use managed Redis service (update `REDIS_URL`)
-3. Use connection pooler for Supabase (port 6543)
-4. Set up proper secrets management (don't commit `.env` files)
-5. Configure reverse proxy (Nginx/Traefik) if needed
-6. Use multiple worker instances for scalability
+3. Set up proper secrets management (don't commit `.env` files)
+4. Configure reverse proxy (Nginx/Traefik) if needed
+5. Use multiple worker instances for scalability
 
 ## License
 

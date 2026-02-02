@@ -12,17 +12,13 @@ from app.core.env import load_app_env
 load_app_env()
 
 
-def _require_env(keys: list[str]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for k in keys:
-        v = os.getenv(k)
-        if v is None or not str(v).strip():
-            raise Exception(f"Environment variable {k} is not set")
-        out[k] = str(v).strip()
-    return out
+def _require_env(key: str) -> str:
+    v = os.getenv(key)
+    if v is None or not str(v).strip():
+        raise RuntimeError(f"Environment variable {key} is not set")
+    return str(v).strip()
 
-
-def _build_url(host: str, port: str, user: str, password: str, name: str) -> str:
+def _build_postgres_url(host: str, port: str, user: str, password: str, name: str) -> str:
     # URL-encode password so special characters don't break the URL.
     return (
         f"postgresql+psycopg://{user}:{quote_plus(password)}@{host}:{port}/{name}"
@@ -30,64 +26,79 @@ def _build_url(host: str, port: str, user: str, password: str, name: str) -> str
     )
 
 
-# Local / python_chat DB (required in production, but keep imports safe if env is missing)
-PYTHON_CHAT_DB_URL: str | None = None
-python_chat_engine = None
+### Dashboard database connection
+
+dashboard_db_URL: str | None = None
+dashboard_db_engine = None
+DashboardDbSessionLocal = None
+
+try:
+    host = _require_env("DASHBOARD_DB_HOST")
+    port = _require_env("DASHBOARD_DB_PORT")
+    user = _require_env("DASHBOARD_DB_USERNAME")
+    password = _require_env("DASHBOARD_DB_PASSWORD")
+    name = _require_env("DASHBOARD_DB_NAME")
+
+    dashboard_db_URL = _build_postgres_url(host, port, user, password, name)
+    dashboard_db_engine = create_engine(
+        dashboard_db_URL,
+        echo=False,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+    )
+    DashboardDbSessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=dashboard_db_engine
+    )
+except Exception:
+    pass
+
+
+#### Python chat database connection
+
+PYTHON_CHAT_DATABASE_URL: str | None = None
+chat_engine = None
 SessionLocal = None
 
 try:
-    DB_ENV = _require_env(["DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME"])
-    PYTHON_CHAT_DB_URL = _build_url(
-        DB_ENV["DB_HOST"],
-        DB_ENV["DB_PORT"],
-        DB_ENV["DB_USER"],
-        DB_ENV["DB_PASSWORD"],
-        DB_ENV["DB_NAME"],
+    host = _require_env("PYTHON_CHAT_DB_HOST")
+    port = _require_env("PYTHON_CHAT_DB_PORT")
+    user = _require_env("PYTHON_CHAT_DB_USERNAME")
+    password = _require_env("PYTHON_CHAT_DB_PASSWORD")
+    name = _require_env("PYTHON_CHAT_DB_NAME")
+
+    PYTHON_CHAT_DATABASE_URL = _build_postgres_url(host, port, user, password, name)
+    chat_engine = create_engine(
+        PYTHON_CHAT_DATABASE_URL,
+        echo=False,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
     )
-    python_chat_engine = create_engine(
-        PYTHON_CHAT_DB_URL, echo=True, pool_size=10, max_overflow=20, pool_pre_ping=True
+    SessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=chat_engine
     )
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=python_chat_engine)
 except Exception:
     # Engine/session will be unavailable until env vars are set.
     pass
 
 
-# Supabase DB (optional)
-SUPABASE_DB_URL: str | None = None
-supabase_engine = None
-SupabaseSessionLocal = None
-
-_supabase_keys = ["SUPABASE_DB_HOST", "SUPABASE_DB_PORT", "SUPABASE_DB_USER", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_NAME"]
-if all(os.getenv(k) for k in _supabase_keys):
-    SB = _require_env(_supabase_keys)
-    SUPABASE_DB_URL = _build_url(
-        SB["SUPABASE_DB_HOST"],
-        SB["SUPABASE_DB_PORT"],
-        SB["SUPABASE_DB_USER"],
-        SB["SUPABASE_SERVICE_ROLE_KEY"],
-        SB["SUPABASE_DB_NAME"],
-    )
-    supabase_engine = create_engine(
-        SUPABASE_DB_URL, echo=True, pool_size=10, max_overflow=20, pool_pre_ping=True
-    )
-    SupabaseSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=supabase_engine)
-
-
-def get_db():
-    if SessionLocal is None:
-        raise RuntimeError("Local DB is not configured (DB_* env vars missing).")
-    db = SessionLocal()
+def get_dashboard_db():
+    if DashboardDbSessionLocal is None:
+        raise RuntimeError(
+            "Public DB is not configured (DASHBOARD_DB_* env vars missing)."
+        )
+    db = DashboardDbSessionLocal()
     try:
         yield db
     finally:
         db.close()
 
 
-def get_supabase_db():
-    if SupabaseSessionLocal is None:
-        raise RuntimeError("Supabase DB is not configured (SUPABASE_DB_* env vars missing).")
-    db = SupabaseSessionLocal()
+def get_chat_db():
+    if SessionLocal is None:
+        raise RuntimeError("Python chat DB is not configured (PYTHON_CHAT_DB_* env vars missing).")
+    db = SessionLocal()
     try:
         yield db
     finally:

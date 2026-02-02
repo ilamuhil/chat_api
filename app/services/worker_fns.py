@@ -4,7 +4,12 @@ import uuid
 import logging
 from typing import Sequence
 from urllib.parse import urlparse
-from app.helpers.utils import delete_file_from_storage, extract_main_text_from_html, clean_scraped_text, get_signed_file_url
+from app.helpers.utils import (
+    delete_file_from_storage,
+    extract_main_text_from_html,
+    clean_scraped_text,
+)
+from app.infra.r2_storage import r2_download_to_path, r2_object_exists
 import httpx
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_community.document_loaders.csv_loader import CSVLoader
@@ -14,25 +19,24 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 import tempfile
 from pathlib import Path
 from sqlalchemy import delete, select
-from app.models.supabase import Files, TrainingSources
 from datetime import datetime, timezone
-from app.db.session import SessionLocal, SupabaseSessionLocal
+from app.db.session import DashboardDbSessionLocal, SessionLocal
 from sqlalchemy.orm import Session
-from app.models.python_chat import Documents, TrainingJobs, Embeddings, Documents
+from app.models.chat_db_models import Documents, TrainingJobs, Embeddings
+from app.models.dashboard_db_models import Files, TrainingSources
 
 logger = logging.getLogger(__name__)
 
 
 def process_url_training_source(
     source: TrainingSources,
-    sb_session: Session,
     py_session: Session,
     chunk_config: dict | None = None,
 ) -> None:
     """
     - Verifies if the source is a valid URL
     - Fetches the HTML and extracts the main content and cleans it falls back to WebBaseLoader if the main text falls short of the threshold.
-    - Chunks the content for RAG and persists to python_chat_db.documents
+    - Chunks the content for RAG and persists to chat_db.documents
     """
     if chunk_config is None:
         chunk_config = {"chunk_size": 800, "chunk_overlap": 100}
@@ -46,8 +50,8 @@ def process_url_training_source(
     if not all([res.scheme, res.netloc]):
         source.status = "failed"
         source.error_message = f"Invalid URL: {url} format"
-        sb_session.commit()
-        sb_session.refresh(source)
+        py_session.commit()
+        py_session.refresh(source)
         logger.error(f"Invalid URL: {url}")
         raise ValueError(f"Invalid URL: {url}")
 
@@ -98,7 +102,7 @@ def process_url_training_source(
             raise ValueError(
                 "Page content too short after fallback extraction/cleaning")
 
-    # Chunk for RAG and persist to python_chat.documents
+    # Chunk for RAG and persist to chat.documents
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=int(chunk_config.get("chunk_size", 800)),
         chunk_overlap=int(chunk_config.get("chunk_overlap", 100)),
@@ -108,7 +112,7 @@ def process_url_training_source(
         py_session.add(
             Documents(
                 organization_id=str(source.organization_id),
-                bot_id=int(source.bot_id),
+                bot_id=source.bot_id,
                 source_id=source.id,
                 chunk_index=i,
                 content=chunk,
@@ -131,7 +135,9 @@ def _loader_for_path(path: Path):
         f"Unsupported file type: {ext}. Supported: .csv .md .pdf .txt")
 
 
-def process_file_training_source(source: TrainingSources, sb_session: Session, py_session: Session, chunk_config: dict) -> None:
+def process_file_training_source(
+    source: TrainingSources, py_session: Session, chunk_config: dict | None = None
+) -> None:
     if chunk_config is None:
         chunk_config = {"chunk_size": 800, "chunk_overlap": 100}
     if source.bot_id is None or source.organization_id is None:
@@ -139,27 +145,22 @@ def process_file_training_source(source: TrainingSources, sb_session: Session, p
 
     # Find the file record so we know its storage path (and extension).
     file_uuid = uuid.UUID(str(source.source_value))
-    file_record = sb_session.scalars(
+    file_record = py_session.scalars(
         select(Files).where(Files.id == file_uuid)).one_or_none()
     if file_record is None or not file_record.path:
         raise ValueError(
             f"File record not found for id: {source.source_value}")
+    if not file_record.bucket:
+        raise ValueError(f"File record missing bucket for id: {source.source_value}")
 
-    # Get a short-lived signed URL for the private object
-    file_signed_url = get_signed_file_url(
-        file_record.bucket or "", file_record.path, expires_in=3600)
-    if not file_signed_url:
-        raise ValueError(
-            f"Could not create signed URL for file id: {source.source_value}")
+    if not r2_object_exists(file_record.bucket, file_record.path):
+        raise ValueError(f"R2 object not found: {file_record.bucket}/{file_record.path}")
 
     # Download to a temp file, then use LangChain loaders (csv/md/pdf/txt).
     suffix = Path(file_record.path).suffix or ""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir) / f"source{suffix}"
-        with httpx.Client(timeout=60.0, follow_redirects=True) as client:
-            resp = client.get(file_signed_url)
-            resp.raise_for_status()
-            tmp_path.write_bytes(resp.content)
+        r2_download_to_path(file_record.bucket, file_record.path, str(tmp_path))
 
         loader = _loader_for_path(tmp_path)
         docs = loader.load()
@@ -177,7 +178,7 @@ def process_file_training_source(source: TrainingSources, sb_session: Session, p
             py_session.add(
                 Documents(
                     organization_id=str(source.organization_id),
-                    bot_id=int(source.bot_id),
+                    bot_id=source.bot_id,
                     source_id=source.id,
                     chunk_index=i,
                     content=chunk,
@@ -188,39 +189,40 @@ def process_file_training_source(source: TrainingSources, sb_session: Session, p
 
 def process_training_job(
     job_id: str,
-    bot_id: int,
+    bot_id: str,
     organization_id: str,
     source_ids: Sequence[str],
 ) -> None:
-    if SessionLocal is None or SupabaseSessionLocal is None:
+    if SessionLocal is None or DashboardDbSessionLocal is None:
         logger.critical("Database sessions not configured")
         return
 
-    py_session = SessionLocal()
-    sb_session = SupabaseSessionLocal()
+    chat_session = SessionLocal()
+    public_session = DashboardDbSessionLocal()
 
     job = None
     any_failed = False
 
     try:
         job_uuid = uuid.UUID(job_id)
+        bot_uuid = uuid.UUID(str(bot_id))
 
         # ---- Load job ----
-        job = py_session.scalars(
+        job = chat_session.scalars(
             select(TrainingJobs).where(TrainingJobs.id == job_uuid)
         ).one()
 
         job.status = "processing"
         job.started_at = datetime.now(timezone.utc)
-        py_session.commit()
+        chat_session.commit()
 
         # ---- Load sources (scoped) ----
         source_uuids = [uuid.UUID(sid) for sid in source_ids]
 
-        sources = sb_session.scalars(
+        sources = public_session.scalars(
             select(TrainingSources).where(
                 TrainingSources.id.in_(source_uuids),
-                TrainingSources.bot_id == bot_id,
+                TrainingSources.bot_id == bot_uuid,
                 TrainingSources.organization_id == organization_id,
             )
         ).all()
@@ -237,7 +239,7 @@ def process_training_job(
             try:
                 # ---- Mark source processing ----
                 source.status = "processing"
-                sb_session.commit()
+                public_session.commit()
 
                 logger.info(
                     "Processing training source",
@@ -245,17 +247,16 @@ def process_training_job(
                 )
 
                 if source.type == "url":
-                    process_url_training_source(source, sb_session, py_session)
+                    process_url_training_source(source, chat_session)
                 else:
                     process_file_training_source(
                         source,
-                        sb_session,
-                        py_session,
+                        public_session,
                         chunk_config={"chunk_size": 800, "chunk_overlap": 100},
                     )
 
                 source.status = "completed"
-                sb_session.commit()
+                public_session.commit()
 
             except Exception as e:
                 any_failed = True
@@ -267,15 +268,15 @@ def process_training_job(
                         "error": str(e),
                     },
                 )
-                sb_session.rollback()
+                public_session.rollback()
                 source.status = "failed"
                 source.error_message = str(e)
-                sb_session.commit()
+                public_session.commit()
 
         # ---- Final job status ----
         job.status = "failed" if any_failed else "completed"
         job.completed_at = datetime.now(timezone.utc)
-        py_session.commit()
+        chat_session.commit()
 
         logger.info(
             "Training job finished",
@@ -287,43 +288,54 @@ def process_training_job(
             "Training job crashed",
             extra={"job_id": job_id, "error": str(e)},
         )
-        py_session.rollback()
-        sb_session.rollback()
+        chat_session.rollback()
+        public_session.rollback()
 
         if job is not None:
             try:
                 job.status = "failed"
                 job.completed_at = datetime.now(timezone.utc)
-                py_session.commit()
+                chat_session.commit()
             except Exception:
-                py_session.rollback()
+                chat_session.rollback()
 
     finally:
-        sb_session.close()
-        py_session.close()
+        public_session.close()
+        chat_session.close()
 
 
-def delete_training_source_job(job_id: str, source_id: str, organization_id: str, bot_id: int):
+def delete_training_source_job(job_id: str, source_id: str, organization_id: str, bot_id: str):
     """
     The following tasks are performed:
-    1. Hard delete the files from supabase storage bucket if source is of type file
-    2. Hard delete files row from supabase db if source is of type file
-    3. Hard delete the embeddings from the embeddings table in python_chat_db
-    4. Hard delete the documents chunks from the documents table in python_chat_db
-    5. Soft delete the training_jobs record in python_chat_db
-    6. Soft delete the training_sources record in python_chat_db mark status as "purged" -> "deleted" status is used to track training_source records that are not gone through the deletion job process. It marks ui intent only.
+    1. Hard delete the files from R2 storage bucket if source is of type file
+    2. Hard delete files row from the DB if source is of type file
+    3. Hard delete the embeddings from the embeddings table in chat_db
+    4. Hard delete the documents chunks from the documents table in chat_db
+    5. Soft delete the training_jobs record in chat_db
+    6. Soft delete the training_sources record in chat_db mark status as "purged" -> "deleted" status is used to track training_source records that are not gone through the deletion job process. It marks ui intent only.
     """
-    sb_session = SupabaseSessionLocal()
     py_session = SessionLocal()
-    if sb_session is None or py_session is None:
+    if py_session is None:
         logger.critical("Database session not Configured")
         return
     try:
-        job = py_session.scalars(select(TrainingJobs).where(TrainingJobs.id == job_id).where(
-            TrainingJobs.organization_id == organization_id).where(TrainingJobs.bot_id == bot_id)).one_or_none()
+        job_uuid = uuid.UUID(str(job_id))
+        bot_uuid = uuid.UUID(str(bot_id))
+        job = py_session.scalars(
+            select(TrainingJobs)
+            .where(TrainingJobs.id == job_uuid)
+            .where(TrainingJobs.organization_id == organization_id)
+            .where(TrainingJobs.bot_id == bot_uuid)
+        ).one_or_none()
         source_uuid = uuid.UUID(source_id)
-        source = sb_session.scalars(select(TrainingSources).where(TrainingSources.id == source_uuid).where(TrainingSources.status == "deleted").where(
-            TrainingSources.organization_id == organization_id).where(TrainingSources.bot_id == bot_id).with_for_update()).one_or_none()
+        source = py_session.scalars(
+            select(TrainingSources)
+            .where(TrainingSources.id == source_uuid)
+            .where(TrainingSources.status == "deleted")
+            .where(TrainingSources.organization_id == organization_id)
+            .where(TrainingSources.bot_id == bot_uuid)
+            .with_for_update()
+        ).one_or_none()
         if not job:
             logger.error("job not found for id", extra={"job_id": job_id})
             raise ValueError(f"job not found for id: {job_id}")
@@ -332,7 +344,7 @@ def delete_training_source_job(job_id: str, source_id: str, organization_id: str
                         "source_id": source_id})
             return
         source.status = "purging"
-        sb_session.commit()
+        py_session.commit()
         logger.info(f"source status updated to purging: {source_id}")
 
         with py_session.begin():
@@ -346,9 +358,9 @@ def delete_training_source_job(job_id: str, source_id: str, organization_id: str
                     Embeddings.document_id.in_(document_ids)))
                 py_session.execute(delete(Documents).where(
                     Documents.source_id == source.id))
-                logger.info(f"embeddings deleted from python_chat_db", extra={
+                logger.info(f"embeddings deleted from chat_db", extra={
                             "deleted_embeddings": len(embeddings)})
-                logger.info(f"documents deleted from python_chat_db",
+                logger.info(f"documents deleted from chat_db",
                             extra={"deleted_documents": len(documents)})
             job.status = "cleanup_completed"
             job.completed_at = datetime.now(timezone.utc)
@@ -356,7 +368,7 @@ def delete_training_source_job(job_id: str, source_id: str, organization_id: str
             logger.info(f"job status updated to deleted: {job_id}")
         if source.type == "file":
             file_uuid = uuid.UUID(str(source.source_value))
-            file_record = sb_session.scalars(
+            file_record = py_session.scalars(
                 select(Files).where(Files.id == file_uuid)).one_or_none()
             if file_record is None:
                 logger.warning("file record not found for source", extra={
@@ -374,12 +386,12 @@ def delete_training_source_job(job_id: str, source_id: str, organization_id: str
                         file_record.bucket, file_record.path)
                     logger.info(f"file deleted from storage:", extra={
                                 "file_id": source.source_value, "file_path": file_record.path, "bucket": file_record.bucket})
-                    sb_session.delete(file_record)
+                    py_session.delete(file_record)
                     logger.info(f"file record deleted from sb_db: {source.source_value}", extra={
                                 "file_id": source.source_value, "file_path": file_record.path, "bucket": file_record.bucket})
-                    sb_session.commit()
+                    py_session.commit()
                 except Exception as e:
-                    sb_session.rollback()
+                    py_session.rollback()
                     logger.warning(
                         "Storage delete failed; file metadata retained for retry",
                         extra={
@@ -391,16 +403,15 @@ def delete_training_source_job(job_id: str, source_id: str, organization_id: str
                     )
 
         source.status = "purged"
-        sb_session.commit()
+        py_session.commit()
         logger.info(f"source status updated to purged: {source_id}")
     except Exception as e:
         logger.error(f"Failed to delete training source", extra={
                      "source_id": source_id, "error": str(e)})
         if source is not None:
             source.status = "purge_failed"
-            sb_session.commit()
+            py_session.commit()
             logger.info(f"source status updated to purge_failed: {source_id}")
         raise e
     finally:
-        sb_session.close()
         py_session.close()

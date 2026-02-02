@@ -1,0 +1,227 @@
+dashboard_db (public schema)
+
+
+enums
+-----
+OtpType: EMAIL, MOBILE
+OtpPurpose: LOGIN, VERIFY_EMAIL, VERIFY_PHONE, RESET_PASSWORD
+
+
+organizations
+-------------
+id                 text PRIMARY KEY
+created_at         timestamptz DEFAULT now()
+is_email_verified  boolean DEFAULT false
+name               text
+logo_url           text
+address            jsonb
+email              text
+phone              text
+email_token        text
+
+
+bots
+----
+id                    uuid PRIMARY KEY DEFAULT gen_random_uuid()
+created_at            timestamptz DEFAULT now()
+updated_at            timestamptz DEFAULT now()
+
+organization_id       text REFERENCES organizations(id) ON DELETE CASCADE
+
+name                  text NOT NULL
+tone                  text
+role                  text
+business_description  text
+
+first_message         text
+confirmation_message  text
+lead_capture_message  text
+
+capture_leads         boolean DEFAULT false
+lead_capture_timing   text
+capture_name          boolean DEFAULT false
+capture_email         boolean DEFAULT false
+capture_phone         boolean DEFAULT false
+
+
+users
+-----
+id                    uuid PRIMARY KEY DEFAULT gen_random_uuid()
+created_at            timestamptz DEFAULT now()
+updated_at            timestamptz DEFAULT now()
+
+email                 text UNIQUE
+email_verified        boolean DEFAULT false
+email_verified_at     timestamptz
+password_hash         text
+
+phone                 text
+phone_verified        boolean DEFAULT false
+phone_verified_at     timestamptz
+
+full_name             text
+avatar_url            text
+
+google_id             text UNIQUE
+github_id             text UNIQUE
+microsoft_id          text UNIQUE
+
+google_email          text
+github_email          text
+microsoft_email       text
+
+last_logged_in        timestamptz
+last_logged_in_ip     text
+
+is_active             boolean DEFAULT true
+is_banned             boolean DEFAULT false
+banned_until          timestamptz
+onboarding_completed  boolean DEFAULT false
+
+INDEX (email)
+INDEX (google_id)
+INDEX (github_id)
+INDEX (microsoft_id)
+
+
+organization_members
+--------------------
+id                 uuid PRIMARY KEY DEFAULT gen_random_uuid()
+created_at         timestamptz DEFAULT now()
+
+organization_id    text REFERENCES organizations(id) ON DELETE CASCADE
+user_id            uuid REFERENCES users(id) ON DELETE CASCADE
+role               text
+
+INDEX (organization_id)
+INDEX (user_id)
+
+
+organization_invites
+--------------------
+id                 uuid PRIMARY KEY DEFAULT gen_random_uuid()
+created_at         timestamptz DEFAULT now()
+
+organization_id    text REFERENCES organizations(id) ON DELETE CASCADE
+email              text NOT NULL
+role               text DEFAULT 'editor'
+accepted_at        timestamptz
+
+INDEX (email)
+INDEX (organization_id)
+
+
+otps
+----
+id                 uuid PRIMARY KEY DEFAULT gen_random_uuid()
+created_at         timestamptz DEFAULT now()
+
+user_id            uuid REFERENCES users(id) ON DELETE CASCADE
+code               text NOT NULL
+type               text CHECK (type IN ('EMAIL','MOBILE'))
+purpose            text CHECK (purpose IN ('LOGIN','VERIFY_EMAIL','VERIFY_PHONE','RESET_PASSWORD'))
+
+email              text
+phone              text
+
+expires_at         timestamptz NOT NULL
+used_at            timestamptz
+is_used            boolean DEFAULT false
+
+attempts           integer DEFAULT 0
+max_attempts       integer DEFAULT 5
+ip_address         text
+user_agent         text
+
+INDEX (user_id)
+INDEX (email)
+INDEX (phone)
+INDEX (code)
+INDEX (expires_at)
+
+
+api_keys
+--------
+id                 uuid PRIMARY KEY DEFAULT gen_random_uuid()
+created_at         timestamptz DEFAULT now()
+
+organization_id    text REFERENCES organizations(id) ON DELETE CASCADE
+bot_id             uuid REFERENCES bots(id) ON DELETE CASCADE
+
+name               text NOT NULL
+key_hash           text NOT NULL
+is_active          boolean DEFAULT true
+last_used_at       timestamptz DEFAULT now()
+
+
+files
+-----
+id                 uuid PRIMARY KEY DEFAULT gen_random_uuid()
+created_at         timestamptz DEFAULT now()
+
+organization_id    text REFERENCES organizations(id) ON DELETE CASCADE
+bot_id             uuid REFERENCES bots(id) ON DELETE CASCADE
+
+provider           text DEFAULT 'r2'
+bucket             text
+path               text
+
+original_filename  text
+mime_type          text
+size_bytes         bigint
+
+purpose            text
+status             text
+
+INDEX (organization_id, bot_id, path)  -- files_org_bot_path_idx
+
+
+training_sources
+----------------
+id                 uuid PRIMARY KEY DEFAULT gen_random_uuid()
+created_at         timestamptz DEFAULT now()
+
+organization_id    text REFERENCES organizations(id) ON DELETE CASCADE
+bot_id             uuid REFERENCES bots(id) ON DELETE CASCADE
+
+type               text
+status             text
+error_message      text
+source_value       text
+
+content_hash       text
+original_filename  text
+size_bytes         bigint
+mime_type          text
+
+
+conversations_meta
+------------------
+id                   uuid PRIMARY KEY DEFAULT gen_random_uuid()
+created_at           timestamptz DEFAULT now()
+
+mode                 text DEFAULT 'ai'
+organization_id       text REFERENCES organizations(id) ON DELETE CASCADE
+bot_id                uuid REFERENCES bots(id) ON DELETE SET NULL
+api_key_id            uuid REFERENCES api_keys(id) ON DELETE SET NULL
+
+user_name             text
+user_email            text
+status                text
+last_message_snippet  text
+last_message_at       timestamptz
+
+
+leads
+-----
+id                uuid PRIMARY KEY DEFAULT gen_random_uuid()
+captured_at       timestamptz DEFAULT now()
+
+organization_id   text REFERENCES organizations(id) ON DELETE CASCADE
+bot_id            uuid REFERENCES bots(id) ON DELETE SET NULL
+conversation_id   uuid REFERENCES conversations_meta(id) ON DELETE SET NULL
+
+name              text
+email             text
+phone             text
+

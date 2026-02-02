@@ -76,6 +76,7 @@ Thumbs.db
 Desktop.ini
 
 # Logs
+logs/
 *.log
 
 # Secrets / keys / certs
