@@ -86,6 +86,7 @@ class TrainingJobs(Base):
                        ] = mapped_column(DateTime(True))
     completed_at: Mapped[Optional[datetime.datetime]
                          ] = mapped_column(DateTime(True))
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class Embeddings(Base):

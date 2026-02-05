@@ -1,28 +1,27 @@
 from __future__ import annotations
 
-import uuid
 import logging
+import tempfile
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Sequence
 from urllib.parse import urlparse
-from app.helpers.utils import (
-    delete_file_from_storage,
-    extract_main_text_from_html,
-    clean_scraped_text,
-)
-from app.infra.r2_storage import r2_download_to_path, r2_object_exists
+
 import httpx
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_community.document_loaders.csv_loader import CSVLoader
-from langchain_community.document_loaders.text import TextLoader
 from langchain_community.document_loaders.pdf import PyPDFLoader
+from langchain_community.document_loaders.text import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import tempfile
-from pathlib import Path
 from sqlalchemy import delete, select
-from datetime import datetime, timezone
-from app.db.session import DashboardDbSessionLocal, SessionLocal
 from sqlalchemy.orm import Session
-from app.models.chat_db_models import Documents, TrainingJobs, Embeddings
+
+from app.db.session import DashboardDbSessionLocal, SessionLocal
+from app.helpers.utils import (clean_scraped_text, delete_file_from_storage,
+                               extract_main_text_from_html)
+from app.infra.r2_storage import r2_download_to_path, r2_object_exists
+from app.models.chat_db_models import Documents, Embeddings, TrainingJobs
 from app.models.dashboard_db_models import Files, TrainingSources
 
 logger = logging.getLogger(__name__)
@@ -46,6 +45,7 @@ def process_url_training_source(
         logger.error("Training source missing bot_id/organization_id")
         raise ValueError("Training source missing bot_id/organization_id")
     # verify if the source is a valid url
+    assert isinstance(url, str), "URL must be a string"
     res = urlparse(url)
     if not all([res.scheme, res.netloc]):
         source.status = "failed"
@@ -140,51 +140,129 @@ def process_file_training_source(
 ) -> None:
     if chunk_config is None:
         chunk_config = {"chunk_size": 800, "chunk_overlap": 100}
-    if source.bot_id is None or source.organization_id is None:
-        raise ValueError("Training source missing bot_id/organization_id")
+    
 
     # Find the file record so we know its storage path (and extension).
-    file_uuid = uuid.UUID(str(source.source_value))
-    file_record = py_session.scalars(
-        select(Files).where(Files.id == file_uuid)).one_or_none()
-    if file_record is None or not file_record.path:
-        raise ValueError(
-            f"File record not found for id: {source.source_value}")
-    if not file_record.bucket:
-        raise ValueError(f"File record missing bucket for id: {source.source_value}")
+    if not source.source_value:
+        logger.error(
+            "Training source missing source_value",
+            extra={"source_id": str(source.id), "type": getattr(source, "type", None)},
+        )
+        raise ValueError("Missing file information for this training source.")
 
-    if not r2_object_exists(file_record.bucket, file_record.path):
-        raise ValueError(f"R2 object not found: {file_record.bucket}/{file_record.path}")
+    # `source_value` for file sources is expected to be the object key/path.
+    file_path = str(Path(str(source.source_value)))
+    file_record: Files | None = None
+    try:
+        file_record = py_session.scalars(
+            select(Files).where(Files.path == file_path)
+        ).one_or_none()
+    except Exception:
+        logger.exception(
+            "Failed to query file record for training source",
+            extra={"source_id": str(source.id), "file_path": file_path},
+        )
+        raise ValueError("Unable to locate the uploaded file for this training source.")
+    
+    if file_record is None or file_record.bucket is None or file_record.path is None:
+        logger.error(
+            "File record missing bucket or path",
+            extra={"source_id": str(source.id), "file_record": repr(file_record)},
+        )
+        raise ValueError("Uploaded file metadata is incomplete.")
+ 
+    try:
+        exists = r2_object_exists(file_record.bucket, file_record.path)
+    except Exception:
+        logger.exception(
+            "Failed to check file existence in R2",
+            extra={
+                "source_id": str(source.id),
+                "bucket": file_record.bucket,
+                "path": file_record.path,
+            },
+        )
+        raise ValueError("Unable to verify the file in storage right now. Please retry.")
+
+    if not exists:
+        logger.error(
+            "File not found in storage",
+            extra={
+                "source_id": str(source.id),
+                "bucket": file_record.bucket,
+                "path": file_record.path,
+            },
+        )
+        raise ValueError("File upload was not completed. Please re-upload and try again.")
 
     # Download to a temp file, then use LangChain loaders (csv/md/pdf/txt).
     suffix = Path(file_record.path).suffix or ""
+    cleaned = ""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir) / f"source{suffix}"
-        r2_download_to_path(file_record.bucket, file_record.path, str(tmp_path))
+        try:
+            r2_download_to_path(file_record.bucket, file_record.path, str(tmp_path))
+        except Exception:
+            logger.exception(
+                "Failed to download file from R2",
+                extra={
+                    "source_id": str(source.id),
+                    "bucket": file_record.bucket,
+                    "path": file_record.path,
+                },
+            )
+            raise ValueError("Failed to download the uploaded file")
 
-        loader = _loader_for_path(tmp_path)
-        docs = loader.load()
-        merged = "\n\n".join(
-            [d.page_content for d in docs if getattr(d, "page_content", "")])
-        cleaned = clean_scraped_text(merged)
+        try:
+            loader = _loader_for_path(tmp_path)
+            docs = loader.load()
+            merged = "\n\n".join(
+                [d.page_content for d in docs if getattr(d, "page_content", "")]
+            )
+            cleaned = clean_scraped_text(merged)
+        except ValueError:
+            # Keep user-facing message from loader selection (unsupported type, etc.).
+            raise
+        except Exception:
+            logger.exception(
+                "Failed to parse uploaded file",
+                extra={
+                    "source_id": str(source.id),
+                    "bucket": file_record.bucket,
+                    "path": file_record.path,
+                    "tmp_path": str(tmp_path),
+                },
+            )
+            raise ValueError("Unable to read the uploaded file. Please try a different file.")
     if len(cleaned) < 50:
-        raise ValueError("File content too short after loading/cleaning")
+        logger.error(
+            "File content too short after loading/cleaning",
+            extra={"source_id": str(source.id), "content_length": len(cleaned)},
+        )
+        raise ValueError("File content too short after loading the data from file")
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=int(chunk_config.get(
         "chunk_size", 800)), chunk_overlap=int(chunk_config.get("chunk_overlap", 100)))
     chunks = splitter.split_text(cleaned)
-    with py_session.begin():
-        for i, chunk in enumerate(chunks):
-            py_session.add(
-                Documents(
-                    organization_id=str(source.organization_id),
-                    bot_id=source.bot_id,
-                    source_id=source.id,
-                    chunk_index=i,
-                    content=chunk,
+    try:
+        with py_session.begin():
+            for i, chunk in enumerate(chunks):
+                py_session.add(
+                    Documents(
+                        organization_id=str(source.organization_id),
+                        bot_id=source.bot_id,
+                        source_id=source.id,
+                        chunk_index=i,
+                        content=chunk,
+                    )
                 )
-            )
-        py_session.commit()
+        logger.info(f"Document chunks persisted for source: {source.id}")
+    except Exception:
+        logger.exception(
+            "Failed to persist document chunks",
+            extra={"source_id": str(source.id), "chunk_count": len(chunks)},
+        )
+        raise ValueError("Failed to save training data. Please retry.")
 
 
 def process_training_job(
@@ -198,10 +276,11 @@ def process_training_job(
         return
 
     chat_session = SessionLocal()
-    public_session = DashboardDbSessionLocal()
+    dashboard_session = DashboardDbSessionLocal()
 
     job = None
     any_failed = False
+    any_successful = False
 
     try:
         job_uuid = uuid.UUID(job_id)
@@ -219,7 +298,7 @@ def process_training_job(
         # ---- Load sources (scoped) ----
         source_uuids = [uuid.UUID(sid) for sid in source_ids]
 
-        sources = public_session.scalars(
+        sources = dashboard_session.scalars(
             select(TrainingSources).where(
                 TrainingSources.id.in_(source_uuids),
                 TrainingSources.bot_id == bot_uuid,
@@ -229,17 +308,10 @@ def process_training_job(
 
         for source in sources:
             # ---- Idempotency guard ----
-            if source.status != "pending":
-                logger.info(
-                    "Skipping already processed source",
-                    extra={"job_id": job_id, "source_id": str(source.id)},
-                )
-                continue
-
             try:
                 # ---- Mark source processing ----
-                source.status = "processing"
-                public_session.commit()
+                source.status = "training"
+                dashboard_session.commit()
 
                 logger.info(
                     "Processing training source",
@@ -251,13 +323,13 @@ def process_training_job(
                 else:
                     process_file_training_source(
                         source,
-                        public_session,
+                        dashboard_session,
                         chunk_config={"chunk_size": 800, "chunk_overlap": 100},
                     )
 
-                source.status = "completed"
-                public_session.commit()
-
+                source.status = "trained"
+                dashboard_session.commit()
+                any_successful = True
             except Exception as e:
                 any_failed = True
                 logger.error(
@@ -268,15 +340,17 @@ def process_training_job(
                         "error": str(e),
                     },
                 )
-                public_session.rollback()
-                source.status = "failed"
+                dashboard_session.rollback()
+                source.status = "training_failed"
                 source.error_message = str(e)
-                public_session.commit()
+                dashboard_session.commit()
 
         # ---- Final job status ----
-        job.status = "failed" if any_failed else "completed"
+        job.status = "completed" if any_successful and not any_failed else "partially_completed" if any_successful and any_failed else "failed"
+        
         job.completed_at = datetime.now(timezone.utc)
         chat_session.commit()
+        logger.info(f"Job status updated to {job.status}")
 
         logger.info(
             "Training job finished",
@@ -289,7 +363,7 @@ def process_training_job(
             extra={"job_id": job_id, "error": str(e)},
         )
         chat_session.rollback()
-        public_session.rollback()
+        dashboard_session.rollback()
 
         if job is not None:
             try:
@@ -300,7 +374,7 @@ def process_training_job(
                 chat_session.rollback()
 
     finally:
-        public_session.close()
+        dashboard_session.close()
         chat_session.close()
 
 

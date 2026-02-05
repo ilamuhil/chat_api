@@ -61,11 +61,11 @@ chat_engine = None
 SessionLocal = None
 
 try:
-    host = _require_env("PYTHON_CHAT_DB_HOST")
-    port = _require_env("PYTHON_CHAT_DB_PORT")
-    user = _require_env("PYTHON_CHAT_DB_USERNAME")
-    password = _require_env("PYTHON_CHAT_DB_PASSWORD")
-    name = _require_env("PYTHON_CHAT_DB_NAME")
+    host = _require_env("CHAT_DB_HOST")
+    port = _require_env("CHAT_DB_PORT")
+    user = _require_env("CHAT_DB_USERNAME")
+    password = _require_env("CHAT_DB_PASSWORD")
+    name = _require_env("CHAT_DB_NAME")
 
     PYTHON_CHAT_DATABASE_URL = _build_postgres_url(host, port, user, password, name)
     chat_engine = create_engine(
@@ -97,7 +97,7 @@ def get_dashboard_db():
 
 def get_chat_db():
     if SessionLocal is None:
-        raise RuntimeError("Python chat DB is not configured (PYTHON_CHAT_DB_* env vars missing).")
+        raise RuntimeError("Python chat DB is not configured (CHAT_DB_* env vars missing).")
     db = SessionLocal()
     try:
         yield db

@@ -12,7 +12,6 @@ from sqlalchemy import (
     Index,
     String,
     Text,
-    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -101,6 +100,8 @@ class Bots(Base):
     capture_name: Mapped[bool | None] = mapped_column(Boolean, server_default=text("false"))
     capture_email: Mapped[bool | None] = mapped_column(Boolean, server_default=text("false"))
     capture_phone: Mapped[bool | None] = mapped_column(Boolean, server_default=text("false"))
+    deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
+    deleted_by: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     organization: Mapped["Organizations | None"] = relationship(
         "Organizations", back_populates="bots"
@@ -335,6 +336,8 @@ class Files(Base):
     organization: Mapped["Organizations | None"] = relationship(
         "Organizations", back_populates="files"
     )
+    deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
+    deleted_by: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class TrainingSources(Base):
@@ -361,11 +364,14 @@ class TrainingSources(Base):
     original_filename: Mapped[str | None] = mapped_column(Text)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     mime_type: Mapped[str | None] = mapped_column(Text)
-
+    deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
+    deleted_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
     bot: Mapped["Bots | None"] = relationship("Bots", back_populates="training_sources")
     organization: Mapped["Organizations | None"] = relationship(
         "Organizations", back_populates="training_sources"
     )
+    
 
 
 class ConversationsMeta(Base):

@@ -1,16 +1,21 @@
 from __future__ import annotations
-from datetime import datetime, timezone
-import uuid
+
 import logging
+import uuid
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
-from app.db.session import get_dashboard_db, get_chat_db
-from app.models.dashboard_db_models import Bots, TrainingSources
-from app.models.chat_db_models import TrainingJobs
 from rq import Queue
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db.session import get_chat_db, get_dashboard_db
 from app.infra.redis_client import redis_client
-from app.services.worker_fns import process_training_job, delete_training_source_job
+from app.models.chat_db_models import TrainingJobs
+from app.models.dashboard_db_models import Bots, TrainingSources
+from app.services.worker_fns import (delete_training_source_job,
+                                     process_training_job)
 
 logger = logging.getLogger(__name__)
 
@@ -32,117 +37,83 @@ async def queue_training(
     # bots.id is UUID
     try:
         bot_uuid = uuid.UUID(str(bot_id))
+        organization_uuid = uuid.UUID(str(organization_id))
     except Exception:
         return JSONResponse({"error": "Invalid bot ID"}, status_code=400)
 
-    source_ids = data.get("source_ids", [])
-    if not source_ids or not isinstance(source_ids, list):
-        return JSONResponse({"error": "Source IDs are required"}, status_code=400)
-
-    try:
-        source_uuids = [uuid.UUID(str(source_id)) for source_id in source_ids]
-    except Exception:
-        return JSONResponse({"error": "Invalid source ID"}, status_code=400)
-
-    # ---- Validate bot ownership ----
-    bot = (
-        dashboard_db.query(Bots)
-        .filter(
-            Bots.id == bot_uuid,
-            Bots.organization_id == organization_id,
-        )
-        .first()
-    )
-    if not bot:
-        return JSONResponse({"error": "Bot not found"}, status_code=404)
-
     # ---- Concurrency guard (Python-side authority) ----
-    existing_job = (
-        chat_db.query(TrainingJobs)
-        .filter(
-            TrainingJobs.bot_id == bot_uuid,
-            TrainingJobs.status.in_(["queued", "processing"]),
-        )
-        .first()
-    )
-    if existing_job:
-        return JSONResponse(
-            {"error": "Training already in progress for this bot"},
-            status_code=409,
-        )
+    existing_job = chat_db.scalars(select(TrainingJobs).where(TrainingJobs.bot_id == bot_uuid,TrainingJobs.status.in_(["queued","processing"])))
+    
+    
+    if existing_job.first():
+        return JSONResponse(content={"error": "Training already in progress for this bot"},status_code=409)
 
-    # ---- Validate training sources (must be pending) ----
-    sources = (
-        dashboard_db.query(TrainingSources)
-        .filter(
-            TrainingSources.id.in_(source_uuids),
-            TrainingSources.bot_id == bot_uuid,
-            TrainingSources.status == "pending",
-        )
-        .all()
-    )
-
-    if len(sources) != len(source_ids):
-        return JSONResponse(
-            {"error": "Invalid or non-pending training source IDs"},
-            status_code=400,
-        )
-
+    # Under what statuses should the training source be considered not to be retried for training ?
+    # TODO: Once the happy flow is complete, findout the places where failure is non retryable and then add those as Statuses where we skip fetching the sources for training
+    
+    #Fetch training sources 
+    sources = dashboard_db.scalars(select(TrainingSources).where(TrainingSources.bot_id == bot_uuid,
+                                                                 TrainingSources.organization_id == organization_id, TrainingSources.status.in_(["created"]),TrainingSources.deleted_at.is_(None)))
+    
+    if sources.first() is None:
+        return JSONResponse(content={"message": "No files or urls that can be trained for this bot"},status_code=200)
+    source_uuids = [source.id for source in sources]
     # ---- Create training job ----
-    try:
-        job = TrainingJobs(
+    
+    job = TrainingJobs(
             id=uuid.uuid4(),
-            organization_id=organization_id,
+            organization_id=organization_uuid,
             bot_id=bot_uuid,
             status="queued",
         )
-        chat_db.add(job)
-        chat_db.commit()
-        chat_db.refresh(job)
+        
 
         # ---- Enqueue Redis job ----
-        try:
-            queue = Queue(connection=redis_client)
-            queue.enqueue(
+    try:
+        chat_db.add(job)   
+        chat_db.commit()
+        chat_db.refresh(job)
+        queue = Queue(connection=redis_client)
+        queue.enqueue(
                 process_training_job,
                 str(job.id),
                 str(bot_uuid),
                 organization_id,
                 [str(s) for s in source_uuids],
-            )
-        except Exception as e:
+        )
+        for source in sources:
+                source.status = "queued_for_training"    
+        dashboard_db.commit()
+        return JSONResponse(content={"message": "Training queued", "job_id": str(job.id), "source_ids": [str(s) for s in source_uuids]}, status_code=200)
+    except Exception as e:
             logger.error(
                 "Failed to enqueue Redis job",
                 extra={"job_id": str(job.id), "error": str(e)},
-            )
-            job.status = "failed"
-            job.completed_at = datetime.now(timezone.utc)
-            chat_db.commit()
-            chat_db.refresh(job)
-            return JSONResponse(
-                {"error": "Failed to enqueue training job"},
-                status_code=500,
-            )
+            )    
+            try:
+                job.status = "failed"
+                job.error_message = str(e)
+                job.completed_at = datetime.now(timezone.utc)
+                chat_db.commit()
+                dashboard_db.rollback()
+                logger.info(f"Job status updated to failed: {job.id}")
+                return JSONResponse(content={"message": "An error occurred while training the sources"}, status_code=500)
+            except Exception as e:
+                logger.error(
+                    "Failed to update job status as failed",
+                    extra={"job_id": str(job.id), "error": str(e)},
+                )
+                chat_db.rollback()
+                dashboard_db.rollback()
+                return JSONResponse(content={"Internal Server Error"}, status_code=500)
+            
+           
+        
+                
 
-    except Exception as e:
-        logger.error(
-            "Failed to queue training",
-            extra={"bot_id": bot_id, "error": str(e)},
-        )
-        chat_db.rollback()
-        return JSONResponse(
-            {"error": "Failed to queue training"},
-            status_code=500,
-        )
+    
 
-    return JSONResponse(
-        {
-            "message": "Training queued",
-            "job_id": str(job.id),
-            "source_count": len(source_ids),
-        },
-        status_code=200,
-    )
+    
 
 
 

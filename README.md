@@ -94,11 +94,11 @@ Create a `.env.local` file (or `.env` for production) with the following variabl
 | `DASHBOARD_DB_USERNAME` | Dashboard DB username | `postgres` |
 | `DASHBOARD_DB_PASSWORD` | Dashboard DB password | `********` |
 | `DASHBOARD_DB_NAME` | Dashboard DB database name | `postgres` |
-| `PYTHON_CHAT_DB_HOST` | Neon host | `ep-...neon.tech` |
-| `PYTHON_CHAT_DB_PORT` | Neon port | `5432` |
-| `PYTHON_CHAT_DB_USERNAME` | Neon username | `neondb_owner` |
-| `PYTHON_CHAT_DB_PASSWORD` | Neon password | `********` |
-| `PYTHON_CHAT_DB_NAME` | Neon database name | `neondb` |
+| `CHAT_DB_HOST` | Neon host | `ep-...neon.tech` |
+| `CHAT_DB_PORT` | Neon port | `5432` |
+| `CHAT_DB_USERNAME` | Neon username | `neondb_owner` |
+| `CHAT_DB_PASSWORD` | Neon password | `********` |
+| `CHAT_DB_NAME` | Neon database name | `neondb` |
 | `OPENAI_API_KEY` | OpenAI API key for LLM responses | `sk-...` |
 | `R2_ACCOUNT_ID` | Cloudflare account id for R2 S3 endpoint | `xxxxxxxxxxxxxxxxxxxx` |
 | `ACCESS_KEY_ID` | R2 access key id | `xxxxxxxx` |
