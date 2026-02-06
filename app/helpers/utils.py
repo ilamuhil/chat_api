@@ -1,10 +1,6 @@
 import re
 import unicodedata
-
-import numpy as np
-import tiktoken
 from bs4 import BeautifulSoup
-
 from app.infra.r2_storage import (r2_delete_object, r2_object_exists,
                                   r2_presigned_get_url)
 
@@ -97,10 +93,3 @@ def get_signed_file_url(bucket: str, path: str, expires_in: int = 3600) -> str:
     return r2_presigned_get_url(bucket, path, expires_in=expires_in)
 
 
-def count_tokens(text: str,model:str="text-embedding-3-small") -> int:
-    encoding = tiktoken.encoding_for_model(model)
-    return len(encoding.encode(text))
-
-
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))

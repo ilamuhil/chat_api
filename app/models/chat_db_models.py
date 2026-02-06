@@ -8,7 +8,8 @@ from uuid import UUID
 from pgvector.sqlalchemy.vector import VECTOR
 from sqlalchemy import (ARRAY, BigInteger, Boolean, CheckConstraint, DateTime,
                         Double, Float, ForeignKeyConstraint, Index, Integer,
-                        PrimaryKeyConstraint, String, Text, Uuid, text)
+                        PrimaryKeyConstraint, String, Text, UniqueConstraint,
+                        Uuid, text)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 #Chat database maintained by the python chat server.
@@ -22,8 +23,14 @@ class Base(DeclarativeBase):
 
 class Documents(Base):
     __tablename__ = "documents"
-    __table_args__ = (PrimaryKeyConstraint("id", name="documents_pk"),)
-
+    __table_args__ = (PrimaryKeyConstraint("id", name="documents_pk"),UniqueConstraint(
+            "source_id",
+            "chunk_index",
+            "embedding_model",
+            "embedding_version",
+            name="uq_documents_source_chunk_model_version",
+        ))
+    
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, server_default=text('gen_random_uuid()'))
     organization_id: Mapped[str] = mapped_column(Text, nullable=False)
@@ -86,11 +93,12 @@ class Embeddings(Base):
                              ondelete="CASCADE", name="embeddings_document_id_fkey"),
         PrimaryKeyConstraint("id", name="embeddings_pkey"),
         Index("embeddings_document_id_idx", "document_id"),
+        
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, server_default=text("gen_random_uuid()"))
-    document_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False,unique=True)
     embedding: Mapped[list[float]] = mapped_column(
         VECTOR(1536), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
