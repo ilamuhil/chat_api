@@ -17,6 +17,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.config.rag_config import _EMBEDDING_CONFIG
 from app.db.session import DashboardDbSessionLocal, SessionLocal
 from app.helpers.rag import count_tokens, create_embeddings
 from app.helpers.utils import (clean_scraped_text, delete_file_from_storage,
@@ -26,6 +27,8 @@ from app.models.chat_db_models import Documents, Embeddings, TrainingJobs
 from app.models.dashboard_db_models import Files, TrainingSources
 
 logger = logging.getLogger(__name__)
+
+
 
 
 def process_url_training_source(
@@ -109,25 +112,26 @@ def process_url_training_source(
         chunk_overlap=int(chunk_config.get("chunk_overlap", 100)),
     )
     chunks = splitter.split_text(cleaned)
-    for i, chunk in enumerate[str](chunks):
-        py_session.add(
-            Documents(
-                organization_id=str(source.organization_id),
-                bot_id=source.bot_id,
-                source_id=source.id,
-                chunk_index=i,
-                content=chunk,
-                is_active=False,
-                chunk_size=int(chunk_config.get("chunk_size", 800)),
-                chunk_overlap=int(chunk_config.get("chunk_overlap", 100)),
-                token_count=count_tokens(chunk, "text-embedding-3-small"),
-                embedding_model="text-embedding-3-small",
-                embedding_version="v.1.0.0",
-                embedding_provider="openai",
-            )
-        )
+    
     try:
-        py_session.commit()
+        with py_session.begin():
+            for i, chunk in enumerate[str](chunks):
+                py_session.add(
+                Documents(
+                    organization_id=str(source.organization_id),
+                    bot_id=source.bot_id,
+                    source_id=source.id,
+                    chunk_index=i,
+                    content=chunk,
+                    is_active=False,
+                    chunk_size=int(chunk_config.get("chunk_size", 800)),
+                    chunk_overlap=int(chunk_config.get("chunk_overlap", 100)),
+                    token_count=count_tokens(chunk, _EMBEDDING_CONFIG["model"]),
+                    embedding_model=_EMBEDDING_CONFIG["model"],
+                    embedding_version=_EMBEDDING_CONFIG["version"],
+                    embedding_provider=_EMBEDDING_CONFIG["provider"],
+                )
+        )
     except Exception:
         logger.exception(
             "Failed to persist document chunks",
@@ -158,7 +162,7 @@ def _loader_for_path(path: Path):
 
 
 def process_file_training_source(
-    source: TrainingSources, py_session: Session, chunk_config: dict | None = None
+    source: TrainingSources, chat_session: Session, chunk_config: dict | None = None
 ) -> None:
     if chunk_config is None:
         chunk_config = {"chunk_size": 800, "chunk_overlap": 100}
@@ -176,7 +180,7 @@ def process_file_training_source(
     file_path = str(Path(str(source.source_value)))
     file_record: Files | None = None
     try:
-        file_record = py_session.scalars(
+        file_record = chat_session.scalars(
             select(Files).where(Files.path == file_path)
         ).one_or_none()
     except Exception:
@@ -267,18 +271,18 @@ def process_file_training_source(
         "chunk_size", 800)), chunk_overlap=int(chunk_config.get("chunk_overlap", 100)))
     chunks = splitter.split_text(cleaned)
     try:
-        with py_session.begin():
+        with chat_session.begin():
             for i, chunk in enumerate[str](chunks):
-                py_session.add(
+                chat_session.add(
                     Documents(
                         organization_id=str(source.organization_id),
                         bot_id=source.bot_id,
                         source_id=source.id,
                         chunk_index=i,
                         content=chunk,
-                        embedding_model="text-embedding-3-small",
-                        embedding_version="v.1.0.0",
-                        embedding_provider="openai",
+                        embedding_model=_EMBEDDING_CONFIG["model"],
+                        embedding_version=_EMBEDDING_CONFIG["version"],
+                        embedding_provider=_EMBEDDING_CONFIG["provider"],
                         is_active=False,
                         chunk_size=int(chunk_config.get("chunk_size", 800)),
                         chunk_overlap=int(chunk_config.get("chunk_overlap", 100)),
@@ -297,12 +301,13 @@ def process_file_training_source(
             extra={"source_id": str(source.id), "chunk_count": len(chunks)},
         )
         raise ValueError("Failed to save training data. Please retry.")
+    
     logger.info(f"Document chunks persisted for training source",extra={"source_id": str(source.id), "chunk_count": len(chunks)})
     
     
     # Create embeddings for the chunks
-    documents = list[Documents](py_session.scalars(select(Documents).where(Documents.source_id == source.id,Documents.is_active == False).order_by(Documents.chunk_index)).all())
-    create_embeddings(py_session, documents,str(source.id))
+    documents = list[Documents](chat_session.scalars(select(Documents).where(Documents.source_id == source.id,Documents.is_active == False).order_by(Documents.chunk_index)).all())
+    create_embeddings(chat_session, documents,str(source.id))
     
 
 def process_training_job(
@@ -363,7 +368,7 @@ def process_training_job(
                 else:
                     process_file_training_source(
                         source,
-                        dashboard_session,
+                        chat_session,
                         chunk_config={"chunk_size": 800, "chunk_overlap": 100},
                     )
 

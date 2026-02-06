@@ -6,8 +6,8 @@ from typing import Optional
 from uuid import UUID
 
 from pgvector.sqlalchemy.vector import VECTOR
-from sqlalchemy import (ARRAY, BigInteger, Boolean, CheckConstraint, DateTime,
-                        Double, Float, ForeignKeyConstraint, Index, Integer,
+from sqlalchemy import (ARRAY, Boolean, CheckConstraint, DateTime, Double,
+                        Float, ForeignKeyConstraint, Index, Integer,
                         PrimaryKeyConstraint, String, Text, UniqueConstraint,
                         Uuid, text)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
