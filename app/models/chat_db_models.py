@@ -1,30 +1,19 @@
 from __future__ import annotations
 
-#Chat database maintained by the python chat server.
-
 import datetime
 import uuid
 from typing import Optional
+from uuid import UUID
 
 from pgvector.sqlalchemy.vector import VECTOR
-from sqlalchemy import (
-    ARRAY,
-    BigInteger,
-    Boolean,
-    CheckConstraint,
-    DateTime,
-    Float,
-    ForeignKeyConstraint,
-    Index,
-    Integer,
-    PrimaryKeyConstraint,
-    String,
-    Text,
-    Uuid,
-    text,
-    Double
-)
+from sqlalchemy import (ARRAY, BigInteger, Boolean, CheckConstraint, DateTime,
+                        Double, Float, ForeignKeyConstraint, Index, Integer,
+                        PrimaryKeyConstraint, String, Text, Uuid, text)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+#Chat database maintained by the python chat server.
+
+
 
 
 class Base(DeclarativeBase):
@@ -50,6 +39,7 @@ class Documents(Base):
     token_count: Mapped[Optional[int]] = mapped_column(Integer)
     embedding_model: Mapped[Optional[str]] = mapped_column(Text)
     embedding_version: Mapped[Optional[str]] = mapped_column(Text)
+    embedding_provider: Mapped[Optional[str]] = mapped_column(Text)
     is_active: Mapped[Optional[bool]] = mapped_column(
         Boolean, server_default=text('true'))
 
@@ -124,7 +114,7 @@ class RetrievalLogs(Base):
     query_embedding: Mapped[Optional[list[float]]
                             ] = mapped_column(VECTOR(1536))
     retrieved_document_ids: Mapped[Optional[list[uuid.UUID]]] = mapped_column(
-        ARRAY(Uuid()))
+        ARRAY[UUID](Uuid[UUID]()))
     similarity_scores: Mapped[Optional[list[float]]
                               ] = mapped_column(ARRAY(Float(precision=53)))
     retrieval_threshold: Mapped[Optional[float]] = mapped_column(Float(53))

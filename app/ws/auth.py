@@ -33,11 +33,16 @@ async def authenticate_socket(
     if claims.get("conversation_id") != conversation_id:
         await websocket.close(code=1008, reason="Conversation mismatch")
         return None
+    
+    organization_id = claims.get("organization_id") 
+    if organization_id is None:
+        await websocket.close(code=1008, reason="Organization ID not found")
+        return None
 
     if claims.get("type") == "user":
         session = ChatSession(
             conversation_id=conversation_id,
-            organization_id=claims.get("organization_id"),
+            organization_id=organization_id,
             user_socket=websocket,
         )
         active_sessions[conversation_id] = session

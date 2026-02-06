@@ -1,6 +1,6 @@
 # Chat API
 
-A FastAPI-based chat application with RAG (Retrieval-Augmented Generation) capabilities, supporting real-time WebSocket communication, background job processing with Redis Queue (RQ), and a PostgreSQL backend (Neon).
+A FastAPI-based chat application with RAG (Retrieval-Augmented Generation) capabilities, supporting real-time WebSocket communication, background job processing with Redis Queue (RQ), and PostgreSQL-backed storage.
 
 ## Features
 
@@ -8,7 +8,9 @@ A FastAPI-based chat application with RAG (Retrieval-Augmented Generation) capab
 - **JWT Authentication** for secure API access
 - **Background Job Processing** using Redis Queue (RQ)
 - **RAG Pipeline** for document ingestion and retrieval
-- **PostgreSQL (Neon)** for application data storage
+- **Two Postgres databases**
+  - **Dashboard DB** (used by the Next.js dashboard): orgs/bots/training sources/files
+  - **Chat DB** (managed by this service, typically Neon): documents/embeddings/messages/training jobs
 - **Cloudflare R2** (S3-compatible) for file storage
 - **Docker** support for easy deployment
 
@@ -46,7 +48,7 @@ Place your `public.pem` file in the project root directory. This file is used to
 Start all services (API, workers, and Redis) using Docker Compose:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 This will:
@@ -94,27 +96,39 @@ Create a `.env.local` file (or `.env` for production) with the following variabl
 | `DASHBOARD_DB_USERNAME` | Dashboard DB username | `postgres` |
 | `DASHBOARD_DB_PASSWORD` | Dashboard DB password | `********` |
 | `DASHBOARD_DB_NAME` | Dashboard DB database name | `postgres` |
-| `CHAT_DB_HOST` | Neon host | `ep-...neon.tech` |
-| `CHAT_DB_PORT` | Neon port | `5432` |
-| `CHAT_DB_USERNAME` | Neon username | `neondb_owner` |
-| `CHAT_DB_PASSWORD` | Neon password | `********` |
-| `CHAT_DB_NAME` | Neon database name | `neondb` |
+| `PYTHON_CHAT_DB_HOST` | Chat DB host (Neon, etc.) | `ep-...neon.tech` |
+| `PYTHON_CHAT_DB_PORT` | Chat DB port | `5432` |
+| `PYTHON_CHAT_DB_USERNAME` | Chat DB username | `neondb_owner` |
+| `PYTHON_CHAT_DB_PASSWORD` | Chat DB password | `********` |
+| `PYTHON_CHAT_DB_NAME` | Chat DB database name | `neondb` |
 | `OPENAI_API_KEY` | OpenAI API key for LLM responses | `sk-...` |
+| `OPENAI_MODEL` | (Optional) OpenAI model | `gpt-4o-mini` |
 | `R2_ACCOUNT_ID` | Cloudflare account id for R2 S3 endpoint | `xxxxxxxxxxxxxxxxxxxx` |
 | `ACCESS_KEY_ID` | R2 access key id | `xxxxxxxx` |
 | `SECRET_ACCESS_KEY` | R2 secret access key | `xxxxxxxx` |
 | `CLOUDFLARE_R2_BASE_URL` | (Optional) public base URL for objects | `https://pub-....r2.dev` |
 | `R2_API_KEY_TOKEN` | (Optional) Cloudflare API token (not used by S3 client) | `xxxxxxxx` |
-| `USER_AGENT` | User agent for HTTP requests | `Mozilla/5.0 (compatible; ChatAPI/1.0)` |
 | `LOG_LEVEL` | Logging level | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `REDIS_URL` | Redis connection URL | `redis://redis:6379/0` (Docker) or `redis://localhost:6379/0` (local) |
 
 **Note**: In Docker Compose, use `redis://redis:6379/0` where `redis` resolves to the Redis container hostname. For production, use your managed Redis service URL.
 
+## Databases (high-level)
+
+- **Dashboard DB**: tables defined in `app/models/dashboard_db_models.py` and documented in `dashboard_db_schema.txt`.
+- **Chat DB**: tables defined in `app/models/chat_db_models.py` and documented in `chat_db_schema.txt`.
+
+The service connects to both via env “parts” in `app/db/session.py`.
+
 ## Project Structure
 
 ```
 chat_api/
+├── alembic/                      # Alembic migrations (chat DB only)
+│   ├── alembic.ini
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/
 ├── app/                          # Main application package
 │   ├── api/                      # API layer
 │   │   ├── middleware/           # HTTP middleware (JWT authentication)
@@ -136,8 +150,8 @@ chat_api/
 │   │   ├── redis_client.py      # Redis client configuration
 │   │   └── r2_storage.py        # Cloudflare R2 (S3) client helpers
 │   ├── models/                    # SQLAlchemy ORM models
-│   │   ├── chat_db_models.py      # Local Python chat database models
-│   │   └── dashboard_db_models.py            # Public schema models (users/orgs/bots/files/etc.)
+│   │   ├── chat_db_models.py      # Chat DB models (documents/embeddings/messages/training jobs)
+│   │   └── dashboard_db_models.py # Dashboard DB models (orgs/bots/training sources/files)
 │   ├── services/                  # Business logic
 │   │   ├── chat.py              # Chat message handling
 │   │   └── worker_fns.py       # Background job functions (URL/file processing)
@@ -151,8 +165,9 @@ chat_api/
 ├── docker-compose.yml             # Docker Compose configuration
 ├── Dockerfile                     # Docker image definition
 ├── public.pem                     # JWT public key (RS256)
-├── python_chat_db_schema.txt      # Schema of postgres database managed by python server
-├── dashboard_db_schema.txt             # Dashboard Database Schema reference
+├── chat_db_schema.txt             # Chat DB schema reference
+├── dashboard_db_schema.txt        # Dashboard DB schema reference
+├── training_flow.md               # Training + upload flow notes
 └── requirements.txt               # Python dependencies
 ```
 
@@ -174,7 +189,7 @@ Background workers process training jobs (URL scraping, file processing). They r
 
 ```bash
 # Using Docker Compose
-docker-compose up workers
+docker compose up workers
 
 # Or locally (requires Redis running)
 rq worker default
@@ -227,11 +242,34 @@ rq worker default
 
 ## Database Schemas
 
-### Python Chat Database (`python_chat_db_schema.txt`)
-Local PostgreSQL database for chat messages, documents, embeddings, and training jobs. See `python_chat_db_schema.txt` for the complete schema.
+### Chat DB (`chat_db_schema.txt`)
+Chat DB tables for messages, documents, embeddings, and training jobs. Models live in `app/models/chat_db_models.py`.
 
-### Public Schema (Neon / Postgres)
-Application tables for users, organizations, bots, API keys, training sources, files, and conversations. Models are defined in `app/models/public.py`.
+### Dashboard DB (`dashboard_db_schema.txt`)
+Dashboard DB tables for orgs, bots, training sources, and files. Models live in `app/models/dashboard_db_models.py`.
+
+## Migrations (Chat DB only)
+
+Alembic is configured in `alembic/` and targets `app/models/chat_db_models.py`.
+
+Create a new migration after editing models:
+
+```bash
+python -m alembic -c alembic/alembic.ini revision --autogenerate -m "describe change"
+```
+
+Apply migrations:
+
+```bash
+python -m alembic -c alembic/alembic.ini upgrade head
+```
+
+Inspect migration status:
+
+```bash
+python -m alembic -c alembic/alembic.ini current
+python -m alembic -c alembic/alembic.ini history
+```
 
 ## Logging
 

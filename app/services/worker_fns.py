@@ -5,7 +5,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -13,13 +13,14 @@ from langchain_community.document_loaders import WebBaseLoader
 from langchain_community.document_loaders.csv_loader import CSVLoader
 from langchain_community.document_loaders.pdf import PyPDFLoader
 from langchain_community.document_loaders.text import TextLoader
+from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.db.session import DashboardDbSessionLocal, SessionLocal
 from app.helpers.utils import (clean_scraped_text, delete_file_from_storage,
-                               extract_main_text_from_html)
+                               extract_main_text_from_html, count_tokens)
 from app.infra.r2_storage import r2_download_to_path, r2_object_exists
 from app.models.chat_db_models import Documents, Embeddings, TrainingJobs
 from app.models.dashboard_db_models import Files, TrainingSources
@@ -116,6 +117,7 @@ def process_url_training_source(
                 source_id=source.id,
                 chunk_index=i,
                 content=chunk,
+                is_active=False,
             )
         )
     py_session.commit()
@@ -246,7 +248,7 @@ def process_file_training_source(
     chunks = splitter.split_text(cleaned)
     try:
         with py_session.begin():
-            for i, chunk in enumerate(chunks):
+            for i, chunk in enumerate[str](chunks):
                 py_session.add(
                     Documents(
                         organization_id=str(source.organization_id),
@@ -254,8 +256,20 @@ def process_file_training_source(
                         source_id=source.id,
                         chunk_index=i,
                         content=chunk,
+                        embedding_model="text-embedding-3-small",
+                        embedding_version="v.1.0.0",
+                        embedding_provider="openai",
+                        is_active=False,
+                        chunk_size=int(chunk_config.get("chunk_size", 800)),
+                        chunk_overlap=int(chunk_config.get("chunk_overlap", 100)),
+                        token_count=count_tokens(chunk, "text-embedding-3-small")
                     )
                 )
+                #TODO: Implement versioning logic for the embeddings
+                # Versioning scheme:
+                # PATCH (v1.0.1): metadata-only changes
+                # MINOR (v1.1.0): chunking changes
+                # MAJOR (v2.0.0): model or dimension changes
         logger.info(f"Document chunks persisted for source: {source.id}")
     except Exception:
         logger.exception(
@@ -263,7 +277,29 @@ def process_file_training_source(
             extra={"source_id": str(source.id), "chunk_count": len(chunks)},
         )
         raise ValueError("Failed to save training data. Please retry.")
-
+    logger.info(f"Document chunks persisted for training source",extra={"source_id": str(source.id), "chunk_count": len(chunks)})
+    
+    
+    # Create embeddings for the chunks
+    try:
+        documents = list[Documents](py_session.scalars(select(Documents).where(Documents.source_id == source.id).order_by(Documents.chunk_index)).all())
+        embeddings = OpenAIEmbeddings(
+        model="text-embedding-3-small",dimensions=1536)
+        with py_session.begin():
+            vectors = embeddings.embed_documents([cast(str, document.content) for document in documents])
+            for i, vector in enumerate[list[float]](vectors):
+                py_session.add(Embeddings(
+                    document_id=documents[i].id,
+                    embedding=vector,
+                ))
+                documents[i].is_active = True
+        logger.info(f"Embeddings created for source: {source.id}")
+    except Exception as e:
+        logger.exception(
+            "Failed to create embeddings",
+            extra={"source_id": str(source.id), "chunk_count": len(chunks), "error": str(e)},
+        )
+        raise ValueError("Failed to create embeddings. Please retry.")
 
 def process_training_job(
     job_id: str,
