@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_chat_db, get_dashboard_db
 from app.infra.redis_client import redis_client
 from app.models.chat_db_models import TrainingJobs
-from app.models.dashboard_db_models import Bots, TrainingSources
+from app.models.dashboard_db_models import TrainingSources
 from app.services.worker_fns import (delete_training_source_job,
                                      process_training_job)
 
@@ -33,12 +33,10 @@ async def queue_training(
 
     data = await request.json()
     bot_id = data.get("bot_id")
-
-    # bots.id is UUID
     try:
         bot_uuid = uuid.UUID(str(bot_id))
-        organization_uuid = uuid.UUID(str(organization_id))
-    except Exception:
+    except Exception as e:
+        logger.error("Error occurred while converting bot_id and organization_id to UUID",extra={"error": str(e)})
         return JSONResponse({"error": "Invalid bot ID"}, status_code=400)
 
     # ---- Concurrency guard (Python-side authority) ----
@@ -53,16 +51,16 @@ async def queue_training(
     
     #Fetch training sources 
     sources = dashboard_db.scalars(select(TrainingSources).where(TrainingSources.bot_id == bot_uuid,
-                                                                 TrainingSources.organization_id == organization_id, TrainingSources.status.in_(["created"]),TrainingSources.deleted_at.is_(None)))
+                                                                 TrainingSources.organization_id == organization_id, TrainingSources.status.in_(["created"]),TrainingSources.deleted_at.is_(None))).all()
     
-    if sources.first() is None:
+    if not sources:
         return JSONResponse(content={"message": "No files or urls that can be trained for this bot"},status_code=200)
     source_uuids = [source.id for source in sources]
     # ---- Create training job ----
     
     job = TrainingJobs(
             id=uuid.uuid4(),
-            organization_id=organization_uuid,
+            organization_id=organization_id,
             bot_id=bot_uuid,
             status="queued",
         )

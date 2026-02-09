@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 _ENCODINGS: dict[str, tiktoken.Encoding] = {}
 
 
-def create_embeddings(py_session: Session, documents: list[Documents],source_id: str) -> None:
+def create_embeddings(chat_session: Session, documents: list[Documents],source_id: str) -> None:
   try:
     #Guard against existing embeddings to prevent duplication and empty documents
-    existing = py_session.scalars(
+    existing = chat_session.scalars(
     select(Embeddings.document_id)
     .where(Embeddings.document_id.in_([d.id for d in documents]))
     ).all()
@@ -32,15 +32,18 @@ def create_embeddings(py_session: Session, documents: list[Documents],source_id:
         return
 
     embeddings = OpenAIEmbeddings(
-    model="text-embedding-3-small",dimensions=1536)
-    with py_session.begin():
-      vectors = embeddings.embed_documents([cast(str, document.content) for document in documents])
-      for i, vector in enumerate[list[float]](vectors):
-        py_session.add(Embeddings(
-          document_id=documents[i].id,
-          embedding=vector,
-        ))
+        model="text-embedding-3-small", dimensions=1536,
+    )
+    vectors = embeddings.embed_documents([cast(str, d.content) for d in documents])
+    for i, vector in enumerate[list[float]](vectors):
+        chat_session.add(
+            Embeddings(
+                document_id=documents[i].id,
+                embedding=vector,
+            )
+        )
         documents[i].is_active = True
+    chat_session.commit()
     logger.info(f"Embeddings created for source: {source_id}")
   except Exception:
     logger.exception(

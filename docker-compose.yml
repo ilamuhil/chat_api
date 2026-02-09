@@ -36,7 +36,10 @@ services:
     build: .
     env_file: .env.local
     command: rq worker default
-    depends_on: 
+    volumes:
+      - .:/code
+    working_dir: /code
+    depends_on:
       - redis
   redis:
     image: redis:7

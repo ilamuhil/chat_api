@@ -43,6 +43,7 @@ def extract_main_text_from_html(html: str) -> str:
 
 
 def clean_scraped_text(text: str) -> str:
+    text = text.replace("\x00", "")
     # normalize unicode + newlines
     text = unicodedata.normalize("NFKC", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")

@@ -17,6 +17,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.config.logging_config import setup_logging
 from app.config.rag_config import _EMBEDDING_CONFIG
 from app.db.session import DashboardDbSessionLocal, SessionLocal
 from app.helpers.rag import count_tokens, create_embeddings
@@ -26,6 +27,7 @@ from app.infra.r2_storage import r2_download_to_path, r2_object_exists
 from app.models.chat_db_models import Documents, Embeddings, TrainingJobs
 from app.models.dashboard_db_models import Files, TrainingSources
 
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -117,21 +119,21 @@ def process_url_training_source(
         with py_session.begin():
             for i, chunk in enumerate[str](chunks):
                 py_session.add(
-                Documents(
-                    organization_id=str(source.organization_id),
-                    bot_id=source.bot_id,
-                    source_id=source.id,
-                    chunk_index=i,
-                    content=chunk,
-                    is_active=False,
-                    chunk_size=int(chunk_config.get("chunk_size", 800)),
-                    chunk_overlap=int(chunk_config.get("chunk_overlap", 100)),
-                    token_count=count_tokens(chunk, _EMBEDDING_CONFIG["model"]),
-                    embedding_model=_EMBEDDING_CONFIG["model"],
-                    embedding_version=_EMBEDDING_CONFIG["version"],
-                    embedding_provider=_EMBEDDING_CONFIG["provider"],
+                    Documents(
+                        organization_id=str(source.organization_id),
+                        bot_id=source.bot_id,
+                        source_id=source.id,
+                        chunk_index=i,
+                        content=chunk,
+                        is_active=False,
+                        chunk_size=int(chunk_config.get("chunk_size", 800)),
+                        chunk_overlap=int(chunk_config.get("chunk_overlap", 100)),
+                        token_count=count_tokens(chunk, _EMBEDDING_CONFIG["model"]),
+                        embedding_model=_EMBEDDING_CONFIG["model"],
+                        embedding_version=_EMBEDDING_CONFIG["version"],
+                        embedding_provider=_EMBEDDING_CONFIG["provider"],
+                    )
                 )
-        )
     except Exception:
         logger.exception(
             "Failed to persist document chunks",
@@ -148,21 +150,54 @@ def process_url_training_source(
     
 
 
-def _loader_for_path(path: Path):
-    ext = path.suffix.lower()
+# MIME types we support -> extension used for loader selection
+_MIME_TO_EXT: dict[str, str] = {
+    "application/pdf": ".pdf",
+    "text/csv": ".csv",
+    "text/plain": ".txt",
+    "text/markdown": ".md",
+    "text/x-markdown": ".md",
+}
+
+
+def _extension_for_loader(original_filename: str | None, mime_type: str | None) -> str:
+    """Resolve file extension from original_filename or mime_type for loader selection."""
+    if original_filename:
+        ext = Path(original_filename).suffix.lower()
+        if ext:
+            return ext
+    if mime_type:
+        mime = (mime_type or "").strip().lower().split(";")[0]
+        if mime in _MIME_TO_EXT:
+            return _MIME_TO_EXT[mime]
+    return ""
+
+
+def _loader_for_file(
+    path: Path,
+    original_filename: str | None = None,
+    mime_type: str | None = None,
+) -> PyPDFLoader | CSVLoader | TextLoader:
+    """Pick loader by original_filename extension or mime_type; path is the on-disk file path."""
+    ext = _extension_for_loader(original_filename, mime_type)
+    logger.info(
+        "Loading file",
+        extra={"path": str(path), "original_filename": original_filename, "mime_type": mime_type, "resolved_ext": ext},
+    )
     if ext == ".pdf":
         return PyPDFLoader(str(path))
     if ext == ".csv":
         return CSVLoader(file_path=str(path))
     if ext in (".md", ".txt"):
-        # Treat markdown as text for now (keeps deps light).
         return TextLoader(str(path), encoding="utf-8", autodetect_encoding=True)
     raise ValueError(
-        f"Unsupported file type: {ext}. Supported: .csv .md .pdf .txt")
+        f"Unsupported file type (original_filename={original_filename!r}, mime_type={mime_type!r}). "
+        "Supported: .csv .md .pdf .txt"
+    )
 
 
 def process_file_training_source(
-    source: TrainingSources, chat_session: Session, chunk_config: dict | None = None
+    source: TrainingSources, chat_session: Session,dashboard_session: Session, chunk_config: dict | None = None
 ) -> None:
     if chunk_config is None:
         chunk_config = {"chunk_size": 800, "chunk_overlap": 100}
@@ -180,13 +215,13 @@ def process_file_training_source(
     file_path = str(Path(str(source.source_value)))
     file_record: Files | None = None
     try:
-        file_record = chat_session.scalars(
+        file_record = dashboard_session.scalars(
             select(Files).where(Files.path == file_path)
         ).one_or_none()
-    except Exception:
+    except Exception as e:
         logger.exception(
             "Failed to query file record for training source",
-            extra={"source_id": str(source.id), "file_path": file_path},
+            extra={"source_id": str(source.id), "file_path": file_path, "error": str(e)},
         )
         raise ValueError("Unable to locate the uploaded file for this training source.")
     
@@ -221,8 +256,8 @@ def process_file_training_source(
         )
         raise ValueError("File upload was not completed. Please re-upload and try again.")
 
-    # Download to a temp file, then use LangChain loaders (csv/md/pdf/txt).
-    suffix = Path(file_record.path).suffix or ""
+    # Download to a temp file; use original_filename or mime_type for extension (path is hashed).
+    suffix = _extension_for_loader(file_record.original_filename, file_record.mime_type) or ""
     cleaned = ""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir) / f"source{suffix}"
@@ -240,7 +275,11 @@ def process_file_training_source(
             raise ValueError("Failed to download the uploaded file")
 
         try:
-            loader = _loader_for_path(tmp_path)
+            loader = _loader_for_file(
+                tmp_path,
+                original_filename=file_record.original_filename,
+                mime_type=file_record.mime_type,
+            )
             docs = loader.load()
             merged = "\n\n".join(
                 [d.page_content for d in docs if getattr(d, "page_content", "")]
@@ -369,6 +408,7 @@ def process_training_job(
                     process_file_training_source(
                         source,
                         chat_session,
+                        dashboard_session,
                         chunk_config={"chunk_size": 800, "chunk_overlap": 100},
                     )
 
@@ -385,10 +425,32 @@ def process_training_job(
                         "error": str(e),
                     },
                 )
+                # Rollback both sessions to ensure clean state
                 dashboard_session.rollback()
-                source.status = "training_failed"
-                source.error_message = str(e)
-                dashboard_session.commit()
+                chat_session.rollback()
+                
+                # Refresh source to get latest state, then update status
+                try:
+                    dashboard_session.refresh(source)
+                    source.status = "training_failed"
+                    source.error_message = str(e)
+                    dashboard_session.commit()
+                except Exception:
+                    dashboard_session.rollback()
+                    # If commit fails, try to get a fresh source object
+                    try:
+                        fresh_source = dashboard_session.scalars(
+                            select(TrainingSources).where(TrainingSources.id == source.id)
+                        ).one()
+                        fresh_source.status = "training_failed"
+                        fresh_source.error_message = str(e)
+                        dashboard_session.commit()
+                    except Exception:
+                        dashboard_session.rollback()
+                        logger.exception(
+                            "Failed to update source status after error",
+                            extra={"source_id": str(source.id)},
+                        )
 
         # ---- Final job status ----
         job.status = "completed" if any_successful and not any_failed else "partially_completed" if any_successful and any_failed else "failed"
@@ -433,21 +495,22 @@ def delete_training_source_job(job_id: str, source_id: str, organization_id: str
     5. Soft delete the training_jobs record in chat_db
     6. Soft delete the training_sources record in chat_db mark status as "purged" -> "deleted" status is used to track training_source records that are not gone through the deletion job process. It marks ui intent only.
     """
-    py_session = SessionLocal()
-    if py_session is None:
-        logger.critical("Database session not Configured")
+    chat_session = SessionLocal()
+    dashboard_session = DashboardDbSessionLocal()
+    if chat_session is None or dashboard_session is None:
+        logger.critical("Database sessions not configured")
         return
     try:
         job_uuid = uuid.UUID(str(job_id))
         bot_uuid = uuid.UUID(str(bot_id))
-        job = py_session.scalars(
+        job = chat_session.scalars(
             select(TrainingJobs)
             .where(TrainingJobs.id == job_uuid)
             .where(TrainingJobs.organization_id == organization_id)
             .where(TrainingJobs.bot_id == bot_uuid)
         ).one_or_none()
         source_uuid = uuid.UUID(source_id)
-        source = py_session.scalars(
+        source = dashboard_session.scalars(
             select(TrainingSources)
             .where(TrainingSources.id == source_uuid)
             .where(TrainingSources.status == "deleted")
@@ -463,19 +526,19 @@ def delete_training_source_job(job_id: str, source_id: str, organization_id: str
                         "source_id": source_id})
             return
         source.status = "purging"
-        py_session.commit()
+        dashboard_session.commit()
         logger.info(f"source status updated to purging: {source_id}")
 
-        with py_session.begin():
-            documents = py_session.scalars(select(Documents).where(
+        with chat_session.begin():
+            documents = chat_session.scalars(select(Documents).where(
                 Documents.source_id == source.id)).all()
             document_ids = [document.id for document in documents]
             if document_ids:
-                embeddings = py_session.scalars(select(Embeddings).where(
+                embeddings = chat_session.scalars(select(Embeddings).where(
                     Embeddings.document_id.in_(document_ids))).all()
-                py_session.execute(delete(Embeddings).where(
+                chat_session.execute(delete(Embeddings).where(
                     Embeddings.document_id.in_(document_ids)))
-                py_session.execute(delete(Documents).where(
+                chat_session.execute(delete(Documents).where(
                     Documents.source_id == source.id))
                 logger.info(f"embeddings deleted from chat_db", extra={
                             "deleted_embeddings": len(embeddings)})
@@ -483,54 +546,61 @@ def delete_training_source_job(job_id: str, source_id: str, organization_id: str
                             extra={"deleted_documents": len(documents)})
             job.status = "cleanup_completed"
             job.completed_at = datetime.now(timezone.utc)
-            py_session.commit()
-            logger.info(f"job status updated to deleted: {job_id}")
+        logger.info(f"job status updated to cleanup_completed: {job_id}")
+        
         if source.type == "file":
-            file_uuid = uuid.UUID(str(source.source_value))
-            file_record = py_session.scalars(
-                select(Files).where(Files.id == file_uuid)).one_or_none()
+            # source.source_value is the file path, not UUID
+            file_path = str(source.source_value)
+            file_record = dashboard_session.scalars(
+                select(Files).where(Files.path == file_path)).one_or_none()
             if file_record is None:
                 logger.warning("file record not found for source", extra={
-                    "source_id": source_id, "file_uuid": source.source_value})
+                    "source_id": source_id, "file_path": file_path})
                 raise ValueError(
-                    f"file record not found for id: {source.source_value}")
+                    f"file record not found for path: {file_path}")
             if file_record.bucket is None or file_record.path is None:
                 logger.warning("file record missing bucket or path", extra={
-                    "source_id": source_id, "file_uuid": source.source_value})
+                    "source_id": source_id, "file_path": file_path})
                 raise ValueError(
-                    f"file record missing bucket or path: {source.source_value}")
+                    f"file record missing bucket or path: {file_path}")
             else:
                 try:
                     delete_file_from_storage(
                         file_record.bucket, file_record.path)
                     logger.info(f"file deleted from storage:", extra={
-                                "file_id": source.source_value, "file_path": file_record.path, "bucket": file_record.bucket})
-                    py_session.delete(file_record)
-                    logger.info(f"file record deleted from sb_db: {source.source_value}", extra={
-                                "file_id": source.source_value, "file_path": file_record.path, "bucket": file_record.bucket})
-                    py_session.commit()
+                                "file_id": str(file_record.id), "file_path": file_record.path, "bucket": file_record.bucket})
+                    dashboard_session.delete(file_record)
+                    dashboard_session.commit()
+                    logger.info(f"file record deleted from dashboard_db: {str(file_record.id)}", extra={
+                                "file_id": str(file_record.id), "file_path": file_record.path, "bucket": file_record.bucket})
                 except Exception as e:
-                    py_session.rollback()
+                    dashboard_session.rollback()
                     logger.warning(
                         "Storage delete failed; file metadata retained for retry",
                         extra={
-                            "file_id": file_record.id,
+                            "file_id": str(file_record.id),
                             "bucket": file_record.bucket,
                             "path": file_record.path,
                             "error": str(e),
                         },
                     )
+                    raise
 
         source.status = "purged"
-        py_session.commit()
+        dashboard_session.commit()
         logger.info(f"source status updated to purged: {source_id}")
     except Exception as e:
         logger.error(f"Failed to delete training source", extra={
                      "source_id": source_id, "error": str(e)})
         if source is not None:
-            source.status = "purge_failed"
-            py_session.commit()
-            logger.info(f"source status updated to purge_failed: {source_id}")
+            try:
+                dashboard_session.refresh(source)
+                source.status = "purge_failed"
+                dashboard_session.commit()
+                logger.info(f"source status updated to purge_failed: {source_id}")
+            except Exception:
+                dashboard_session.rollback()
         raise e
     finally:
-        py_session.close()
+        dashboard_session.close()
+        chat_session.close()
