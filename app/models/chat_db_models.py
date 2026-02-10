@@ -47,16 +47,15 @@ class Documents(Base):
     embedding_model: Mapped[Optional[str]] = mapped_column(Text)
     embedding_version: Mapped[Optional[str]] = mapped_column(Text)
     embedding_provider: Mapped[Optional[str]] = mapped_column(Text)
-    is_active: Mapped[Optional[bool]] = mapped_column(
-        Boolean, server_default=text('true'))
-
+    is_active: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('true'))
+    deleted_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
     embeddings: Mapped[list['Embeddings']] = relationship(
         'Embeddings', back_populates='document')
 
 
 class Messages(Base):
     __tablename__ = "messages"
-    __table_args__ = (PrimaryKeyConstraint("id", name="messages_pk"),)
+    __table_args__ = (PrimaryKeyConstraint("id", name="messages_pk"))
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     conversation_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
@@ -92,8 +91,7 @@ class Embeddings(Base):
         ForeignKeyConstraint(["document_id"], ["documents.id"],
                              ondelete="CASCADE", name="embeddings_document_id_fkey"),
         PrimaryKeyConstraint("id", name="embeddings_pkey"),
-        Index("embeddings_document_id_idx", "document_id"),
-        
+        Index("embeddings_document_id_idx", "document_id"), 
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -103,6 +101,7 @@ class Embeddings(Base):
         VECTOR(1536), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True), nullable=False, server_default=text("now()"))
+    deleted_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True))
     document: Mapped["Documents"] = relationship(
         "Documents", back_populates="embeddings")
 

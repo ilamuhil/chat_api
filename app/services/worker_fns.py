@@ -14,23 +14,23 @@ from langchain_community.document_loaders.csv_loader import CSVLoader
 from langchain_community.document_loaders.pdf import PyPDFLoader
 from langchain_community.document_loaders.text import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from sqlalchemy import delete, select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.config.logging_config import setup_logging
 from app.config.rag_config import _EMBEDDING_CONFIG
 from app.db.session import DashboardDbSessionLocal, SessionLocal
 from app.helpers.rag import count_tokens, create_embeddings
-from app.helpers.utils import (clean_scraped_text, delete_file_from_storage,
-                               extract_main_text_from_html)
-from app.infra.r2_storage import r2_download_to_path, r2_object_exists
+from app.helpers.utils import clean_scraped_text, extract_main_text_from_html
+from app.infra.r2_storage import (r2_delete_object, r2_download_to_path,
+                                  r2_object_exists)
 from app.models.chat_db_models import Documents, Embeddings, TrainingJobs
 from app.models.dashboard_db_models import Files, TrainingSources
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-
+_BUCKET = "bot-files"
 
 
 def process_url_training_source(
@@ -144,7 +144,7 @@ def process_url_training_source(
     logger.info(f"Chunks persisted for source", extra={"source_id": str(source.id), "chunk_count": len(chunks)})
     
     # Create embeddings for the chunks
-    documents = list[Documents](py_session.scalars(select(Documents).where(Documents.source_id == source.id,Documents.is_active == False).order_by(Documents.chunk_index)).all())
+    documents = list[Documents](py_session.scalars(select(Documents).where(Documents.source_id == source.id,Documents.is_active == False,Documents.deleted_at.is_(None)).order_by(Documents.chunk_index)).all())
     create_embeddings(py_session, documents,str(source.id))
     
     
@@ -345,7 +345,7 @@ def process_file_training_source(
     
     
     # Create embeddings for the chunks
-    documents = list[Documents](chat_session.scalars(select(Documents).where(Documents.source_id == source.id,Documents.is_active == False).order_by(Documents.chunk_index)).all())
+    documents = list[Documents](chat_session.scalars(select(Documents).where(Documents.source_id == source.id,Documents.is_active == False,Documents.deleted_at.is_(None)).order_by(Documents.chunk_index)).all())
     create_embeddings(chat_session, documents,str(source.id))
     
 
@@ -485,122 +485,166 @@ def process_training_job(
         chat_session.close()
 
 
-def delete_training_source_job(job_id: str, source_id: str, organization_id: str, bot_id: str):
+def delete_training_source_job(
+    job_id: str,
+    source_id: str,
+    organization_id: str,
+    bot_id: str,
+):
     """
-    The following tasks are performed:
-    1. Hard delete the files from R2 storage bucket if source is of type file
-    2. Hard delete files row from the DB if source is of type file
-    3. Hard delete the embeddings from the embeddings table in chat_db
-    4. Hard delete the documents chunks from the documents table in chat_db
-    5. Soft delete the training_jobs record in chat_db
-    6. Soft delete the training_sources record in chat_db mark status as "purged" -> "deleted" status is used to track training_source records that are not gone through the deletion job process. It marks ui intent only.
+    Cleanup worker (best-effort).
+
+    Responsibilities:
+    1. Soft-delete embeddings and documents (idempotent)
+    2. Best-effort delete file from R2 (file sources only)
+    3. Mark training_job as cleanup_completed
+
+    Invariant:
+    - training_sources.deleted_at MUST already be set
     """
+
     chat_session = SessionLocal()
     dashboard_session = DashboardDbSessionLocal()
+
     if chat_session is None or dashboard_session is None:
         logger.critical("Database sessions not configured")
         return
+
+    job = None
+
     try:
         job_uuid = uuid.UUID(str(job_id))
+        source_uuid = uuid.UUID(str(source_id))
         bot_uuid = uuid.UUID(str(bot_id))
+
+        # ---- Load job ----
         job = chat_session.scalars(
             select(TrainingJobs)
             .where(TrainingJobs.id == job_uuid)
             .where(TrainingJobs.organization_id == organization_id)
             .where(TrainingJobs.bot_id == bot_uuid)
         ).one_or_none()
-        source_uuid = uuid.UUID(source_id)
-        source = dashboard_session.scalars(
-            select(TrainingSources)
-            .where(TrainingSources.id == source_uuid)
-            .where(TrainingSources.status == "deleted")
-            .where(TrainingSources.organization_id == organization_id)
-            .where(TrainingSources.bot_id == bot_uuid)
-            .with_for_update()
-        ).one_or_none()
-        if not job:
-            logger.error("job not found for id", extra={"job_id": job_id})
-            raise ValueError(f"job not found for id: {job_id}")
-        if source is None:
-            logger.info("Source already claimed or not eligible for deletion", extra={
-                        "source_id": source_id})
-            return
-        source.status = "purging"
-        dashboard_session.commit()
-        logger.info(f"source status updated to purging: {source_id}")
 
-        with chat_session.begin():
-            documents = chat_session.scalars(select(Documents).where(
-                Documents.source_id == source.id)).all()
-            document_ids = [document.id for document in documents]
-            if document_ids:
-                embeddings = chat_session.scalars(select(Embeddings).where(
-                    Embeddings.document_id.in_(document_ids))).all()
-                chat_session.execute(delete(Embeddings).where(
-                    Embeddings.document_id.in_(document_ids)))
-                chat_session.execute(delete(Documents).where(
-                    Documents.source_id == source.id))
-                logger.info(f"embeddings deleted from chat_db", extra={
-                            "deleted_embeddings": len(embeddings)})
-                logger.info(f"documents deleted from chat_db",
-                            extra={"deleted_documents": len(documents)})
+        if not job:
+            logger.error("Cleanup job not found", extra={"job_id": job_id})
+            return
+
+        job.status = "processing"
+        job.started_at = datetime.now(timezone.utc)
+        chat_session.commit()
+
+        # ---- Load source (authoritative deletion must already be done) ----
+        source = dashboard_session.scalars(
+            select(TrainingSources).where(TrainingSources.id == source_uuid)
+        ).one_or_none()
+
+        if not source:
+            # Source already hard-deleted or TTL-cleaned: cleanup is effectively done
+            logger.warning(
+                "Source already removed; marking cleanup completed",
+                extra={"source_id": source_id},
+            )
             job.status = "cleanup_completed"
             job.completed_at = datetime.now(timezone.utc)
-        logger.info(f"job status updated to cleanup_completed: {job_id}")
-        
+            chat_session.commit()
+            return
+
+        if source.deleted_at is None:
+            # Invariant violation: cleanup must not run on active sources
+            logger.error(
+                "Source not marked as deleted",
+                extra={
+                    "source_id": source_id,
+                    "source_type": source.type,
+                    "source_value": source.source_value,
+                },
+            )
+            raise ValueError("Source not marked as deleted")
+
+        now_ = datetime.now(timezone.utc)
+
+        # ---- Soft-delete embeddings FIRST (idempotent) ----
+        chat_session.execute(
+            update(Embeddings)
+            .where(
+                Embeddings.document_id.in_(
+                    select(Documents.id).where(Documents.source_id == source_uuid)
+                ),
+                Embeddings.deleted_at.is_(None),
+            )
+            .values(deleted_at=now_, deleted_by="system")
+        )
+
+        # ---- Soft-delete documents SECOND (idempotent) ----
+        chat_session.execute(
+            update(Documents)
+            .where(
+                Documents.source_id == source_uuid,
+                Documents.deleted_at.is_(None),
+            )
+            .values(deleted_at=now_, deleted_by="system")
+        )
+
+        chat_session.commit()
+
+        # ---- Best-effort file deletion ----
         if source.type == "file":
-            # source.source_value is the file path, not UUID
-            file_path = str(source.source_value)
-            file_record = dashboard_session.scalars(
-                select(Files).where(Files.path == file_path)).one_or_none()
-            if file_record is None:
-                logger.warning("file record not found for source", extra={
-                    "source_id": source_id, "file_path": file_path})
-                raise ValueError(
-                    f"file record not found for path: {file_path}")
-            if file_record.bucket is None or file_record.path is None:
-                logger.warning("file record missing bucket or path", extra={
-                    "source_id": source_id, "file_path": file_path})
-                raise ValueError(
-                    f"file record missing bucket or path: {file_path}")
-            else:
+            path = source.source_value
+            if path:
                 try:
-                    delete_file_from_storage(
-                        file_record.bucket, file_record.path)
-                    logger.info(f"file deleted from storage:", extra={
-                                "file_id": str(file_record.id), "file_path": file_record.path, "bucket": file_record.bucket})
-                    dashboard_session.delete(file_record)
-                    dashboard_session.commit()
-                    logger.info(f"file record deleted from dashboard_db: {str(file_record.id)}", extra={
-                                "file_id": str(file_record.id), "file_path": file_record.path, "bucket": file_record.bucket})
+                    if r2_object_exists(_BUCKET, path):
+                        r2_delete_object(_BUCKET, path)
+                        logger.info(
+                            "File deleted from R2",
+                            extra={"source_id": source_id, "path": path},
+                        )
+                    else:
+                        logger.info(
+                            "File not found in R2",
+                            extra={"source_id": source_id, "path": path},
+                        )
                 except Exception as e:
-                    dashboard_session.rollback()
-                    logger.warning(
-                        "Storage delete failed; file metadata retained for retry",
+                    logger.exception(
+                        "Failed to delete file from R2",
                         extra={
-                            "file_id": str(file_record.id),
-                            "bucket": file_record.bucket,
-                            "path": file_record.path,
+                            "source_id": source_id,
+                            "path": path,
                             "error": str(e),
                         },
                     )
-                    raise
 
-        source.status = "purged"
-        dashboard_session.commit()
-        logger.info(f"source status updated to purged: {source_id}")
-    except Exception as e:
-        logger.error(f"Failed to delete training source", extra={
-                     "source_id": source_id, "error": str(e)})
-        if source is not None:
+        # ---- Finalize job ----
+        job.status = "cleanup_completed"
+        job.completed_at = datetime.now(timezone.utc)
+        chat_session.commit()
+
+        logger.info("Cleanup completed", extra={"job_id": job_id})
+
+    except ValueError:
+        # Only invariant violations should fail the job
+        if job is not None:
             try:
-                dashboard_session.refresh(source)
-                source.status = "purge_failed"
-                dashboard_session.commit()
-                logger.info(f"source status updated to purge_failed: {source_id}")
+                job.status = "failed"
+                job.completed_at = datetime.now(timezone.utc)
+                chat_session.commit()
             except Exception:
-                dashboard_session.rollback()
-        raise e
+                chat_session.rollback()
+        raise
+
+    except Exception as e:
+        # Best-effort cleanup failure: do NOT fail deletion
+        logger.exception(
+            "Cleanup encountered errors; marking completed",
+            extra={"job_id": job_id, "error": str(e)},
+        )
+        if job is not None:
+            try:
+                job.status = "cleanup_completed"
+                job.completed_at = datetime.now(timezone.utc)
+                chat_session.commit()
+            except Exception:
+                chat_session.rollback()
+
     finally:
         dashboard_session.close()
         chat_session.close()

@@ -21,7 +21,7 @@ def create_embeddings(chat_session: Session, documents: list[Documents],source_i
     #Guard against existing embeddings to prevent duplication and empty documents
     existing = chat_session.scalars(
     select(Embeddings.document_id)
-    .where(Embeddings.document_id.in_([d.id for d in documents]))
+    .where(Embeddings.document_id.in_([d.id for d in documents]),Embeddings.deleted_at.is_(None))
     ).all()
 
     existing_ids = set[UUID](existing)
@@ -58,6 +58,7 @@ def retrieve_closest_embeddings(chat_session: Session, query:list[float], bot_id
     stmnt =  select(Embeddings,Documents).join(Documents, Embeddings.document_id == Documents.id).where(
         Documents.bot_id == bot_id,
         Documents.is_active.is_(True),
+        Documents.deleted_at.is_(None),
         Documents.embedding_model == CURRENT_MODEL,
         Documents.embedding_version == CURRENT_VERSION,
         distance <= threshold
