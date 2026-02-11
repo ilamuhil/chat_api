@@ -55,7 +55,7 @@ class Documents(Base):
 
 class Messages(Base):
     __tablename__ = "messages"
-    __table_args__ = (PrimaryKeyConstraint("id", name="messages_pk"))
+    __table_args__ = (PrimaryKeyConstraint("id", name="messages_pk"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     conversation_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
