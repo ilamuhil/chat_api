@@ -572,7 +572,7 @@ def delete_training_source_job(
                 ),
                 Embeddings.deleted_at.is_(None),
             )
-            .values(deleted_at=now_, deleted_by="system")
+            .values(deleted_at=now_)
         )
 
         # ---- Soft-delete documents SECOND (idempotent) ----
@@ -582,7 +582,7 @@ def delete_training_source_job(
                 Documents.source_id == source_uuid,
                 Documents.deleted_at.is_(None),
             )
-            .values(deleted_at=now_, deleted_by="system")
+            .values(deleted_at=now_)
         )
 
         chat_session.commit()
