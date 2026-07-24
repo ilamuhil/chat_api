@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import jwt
+from jwt.types import Options
 
 
 def _load_public_key() -> bytes | None:
@@ -33,7 +34,7 @@ def _load_public_key() -> bytes | None:
 PUBLIC_KEY = _load_public_key()
 
 
-def verify_token(token: str, options: dict[str, Any]) -> dict[str, Any] | None:
+def verify_token(token: str, options: Options | None) -> dict[str, Any] | None:
     try:
         if not PUBLIC_KEY:
             raise RuntimeError("public.pem not found or empty")

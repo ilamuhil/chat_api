@@ -28,7 +28,7 @@ services:
         - action: rebuild
           path: ./uv.lock
     ports:
-      - 8100:8000  # host 8100 to avoid Windows reserved port 8000
+      - 18000:8000  # host 18000 to avoid Windows reserved port 8000
     volumes:
       - .:/code
     working_dir: /code
