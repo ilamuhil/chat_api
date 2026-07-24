@@ -1,5 +1,5 @@
 # Virtual environment
-chat_env/
+.venv/
 
 # Python cache
 __pycache__/
@@ -31,7 +31,6 @@ mypy.ini
 # Documentation/schema files
 *.txt
 *.md
-!requirements.txt
 
 # Git
 .git/

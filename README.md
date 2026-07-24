@@ -54,7 +54,7 @@ docker compose up -d
 This will:
 - Build the API and worker containers
 - Start Redis container
-- Start the FastAPI server on port 8000
+- Start the FastAPI server at `http://localhost:8100`
 - Start RQ workers for background job processing
 
 ### 5. Verify Installation
@@ -62,7 +62,7 @@ This will:
 Check if the API is running:
 
 ```bash
-curl http://localhost:8000/docs
+curl http://localhost:8100/docs
 ```
 
 You should see the FastAPI interactive documentation.
@@ -164,11 +164,12 @@ chat_api/
 ├── .env.example                   # Environment variables template
 ├── docker-compose.yml             # Docker Compose configuration
 ├── Dockerfile                     # Docker image definition
+├── pyproject.toml                 # Project metadata and dependency ranges
+├── uv.lock                        # Reproducible dependency lockfile
 ├── public.pem                     # JWT public key (RS256)
 ├── chat_db_schema.txt             # Chat DB schema reference
 ├── dashboard_db_schema.txt        # Dashboard DB schema reference
-├── training_flow.md               # Training + upload flow notes
-└── requirements.txt               # Python dependencies
+└── training_flow.md               # Training + upload flow notes
 ```
 
 ### Directory Descriptions
@@ -199,15 +200,15 @@ rq worker default
 
 ### Local Development (without Docker)
 
-1. Create and activate virtual environment:
+1. Install uv:
 ```bash
-python -m venv chat_env
-source chat_env/bin/activate  # On Windows: chat_env\Scripts\activate
+# Installation instructions: https://docs.astral.sh/uv/getting-started/installation/
 ```
 
-2. Install dependencies:
+2. Sync the locked dependencies:
 ```bash
-pip install -r requirements.txt
+# Install uv: https://docs.astral.sh/uv/getting-started/installation/
+uv sync --locked
 ```
 
 3. Set up environment variables in `.env.local`
@@ -219,13 +220,22 @@ docker run --rm -p 6379:6379 redis:7
 
 5. Run the application:
 ```bash
-uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
 
 6. Run workers in a separate terminal:
 ```bash
-rq worker default
+uv run rq worker default
 ```
+
+`uv sync --locked` creates the project environment from `pyproject.toml` and
+`uv.lock`. Use `uv add package-name` to add a direct dependency and commit the
+resulting lockfile. The dependency ranges in `pyproject.toml` describe safe
+major-version boundaries; exact resolved versions remain in `uv.lock`.
+Upgrade intentionally with `uv lock --upgrade-package package-name`, then
+validate the application before updating more packages. Use
+`uvx pip-audit --path .venv` to audit the synced environment without adding the
+audit tool to runtime dependencies.
 
 ## API Endpoints
 
@@ -263,14 +273,14 @@ Run it from the project root after setting the `CHAT_DB_*` variables in
 `.env.local`:
 
 ```bash
-python -m app.db.bootstrap
+uv run python -m app.db.bootstrap
 ```
 
 The command is safe to run again. To skip extension creation when your
 database provider manages extensions separately:
 
 ```bash
-python -m app.db.bootstrap --skip-extensions
+uv run python -m app.db.bootstrap --skip-extensions
 ```
 
 The current migration history contains changes for an existing legacy schema;
@@ -279,7 +289,7 @@ bootstrap command against a brand-new empty Chat DB, mark the database at the
 current migration revision:
 
 ```bash
-python -m alembic -c alembic/alembic.ini stamp head
+uv run alembic -c alembic/alembic.ini stamp head
 ```
 
 Do not run `stamp head` against a database whose tables were not verified.
@@ -289,20 +299,20 @@ use `upgrade head` to apply pending migrations.
 Create a new migration after editing models:
 
 ```bash
-python -m alembic -c alembic/alembic.ini revision --autogenerate -m "describe change"
+uv run alembic -c alembic/alembic.ini revision --autogenerate -m "describe change"
 ```
 
 Apply migrations:
 
 ```bash
-python -m alembic -c alembic/alembic.ini upgrade head
+uv run alembic -c alembic/alembic.ini upgrade head
 ```
 
 Inspect migration status:
 
 ```bash
-python -m alembic -c alembic/alembic.ini current
-python -m alembic -c alembic/alembic.ini history
+uv run alembic -c alembic/alembic.ini current
+uv run alembic -c alembic/alembic.ini history
 ```
 
 ## Logging

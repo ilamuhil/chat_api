@@ -10,6 +10,7 @@ services:
           ignore: 
             - "**/*.pyc"
             - "**/__pycache__"
+            - ".venv/**"
             - "**/*.log"
             - "**/*.json"
             - "**/*.txt"
@@ -23,7 +24,9 @@ services:
         - action: rebuild
           path: ./Dockerfile
         - action: rebuild
-          path: ./requirements.txt
+          path: ./pyproject.toml
+        - action: rebuild
+          path: ./uv.lock
     ports:
       - 8100:8000  # host 8100 to avoid Windows reserved port 8000
     volumes:
