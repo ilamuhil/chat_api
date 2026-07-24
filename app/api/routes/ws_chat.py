@@ -1,10 +1,22 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+import logging
+import uuid
 
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db.session import get_chat_db, get_dashboard_db
 from app.domain.chat import ChatSession
-from app.services.chat import respond_with_ai, send_to_end_user, send_to_support_agent
+from app.infra.redis_store import get_data, set_data
+from app.models.chat_db_models import Messages
+from app.models.dashboard_db_models import Bots
+from app.services.chat import (respond_with_ai, send_to_end_user,
+                               send_to_support_agent)
 from app.ws.auth import authenticate_socket
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
@@ -14,11 +26,53 @@ ACTIVE_SESSIONS: dict[str, ChatSession] = {}
 
 
 @router.websocket("/api/chat/ws")
-async def chat(websocket: WebSocket):
+async def chat(websocket: WebSocket, dashboard_db: Session = Depends(get_dashboard_db), chat_db: Session = Depends(get_chat_db)):
     await websocket.accept()
-    session = await authenticate_socket(websocket, ACTIVE_SESSIONS)
-    if session is None:
+    metadata = await authenticate_socket(websocket, ACTIVE_SESSIONS)
+    #get the data from the bot and store the metadata in redis store and then use it if necessary in the conversation flow. 
+    
+    if metadata is None:
         return
+
+    session, bot_id = metadata
+    
+    bot_pref = get_data(f"bot:{bot_id}:config")
+    if bot_pref is None:
+        stmnt = select(Bots).where(Bots.id == bot_id)
+        bot = dashboard_db.scalar(stmnt)
+        if bot is None:
+            return
+        bot_pref = {
+            "first_message": bot.first_message,
+            "confirmation_message": bot.confirmation_message,
+            "lead_capture_message": bot.lead_capture_message,
+            "lead_capture_timing": bot.lead_capture_timing,
+            "capture_name": bot.capture_name,
+            "capture_email": bot.capture_email,
+            "capture_phone": bot.capture_phone,
+        }
+        set_data(f"bot:{bot_id}:config", bot_pref)
+    if bot_pref["first_message"] is not None:
+        #log the message to the database
+        try:
+            message = Messages(
+                id=uuid.uuid4(),
+                conversation_id=session.conversation_id,
+                role="assistant",
+                content=bot.first_message,
+            )
+            chat_db.add(message)
+            chat_db.commit()
+        except Exception as e:
+            logger.error(f"Error logging first message to database: {str(e)}")
+                
+        
+        await send_to_end_user({
+            "type": "message",
+            "message": bot.first_message,
+            "role": "assistant",
+            "conversation_id": session.conversation_id,
+        },session)
 
     try:
         while True:

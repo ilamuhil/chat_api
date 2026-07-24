@@ -252,6 +252,40 @@ Dashboard DB tables for orgs, bots, training sources, and files. Models live in 
 
 Alembic is configured in `alembic/` and targets `app/models/chat_db_models.py`.
 
+### Initialize a new Chat DB
+
+The reusable bootstrap module is `app/db/bootstrap.py`. It enables the
+PostgreSQL extensions required by the models (`vector` and `pgcrypto`) and
+creates any missing Chat DB tables from the SQLAlchemy metadata. It never
+drops tables or changes existing columns.
+
+Run it from the project root after setting the `CHAT_DB_*` variables in
+`.env.local`:
+
+```bash
+python -m app.db.bootstrap
+```
+
+The command is safe to run again. To skip extension creation when your
+database provider manages extensions separately:
+
+```bash
+python -m app.db.bootstrap --skip-extensions
+```
+
+The current migration history contains changes for an existing legacy schema;
+it is not a complete empty-database bootstrap. Therefore, after running the
+bootstrap command against a brand-new empty Chat DB, mark the database at the
+current migration revision:
+
+```bash
+python -m alembic -c alembic/alembic.ini stamp head
+```
+
+Do not run `stamp head` against a database whose tables were not verified.
+For an existing database, inspect its schema and migration state first, then
+use `upgrade head` to apply pending migrations.
+
 Create a new migration after editing models:
 
 ```bash

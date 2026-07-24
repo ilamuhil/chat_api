@@ -17,6 +17,7 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 logger.info("Logger and env setup complete. Loading Environment", extra={"app_env": os.getenv("APP_ENV")})
+#extra is a dictionary of additional context to be added to the log message. In this setup it will log to the console but not the file.
 
 
 def create_app() -> FastAPI:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from fastapi import WebSocket
 
 from app.core.jwt import verify_token
@@ -9,7 +11,7 @@ from app.domain.chat import ChatSession
 async def authenticate_socket(
     websocket: WebSocket,
     active_sessions: dict[str, ChatSession],
-) -> ChatSession | None:
+) -> tuple[ChatSession, uuid.UUID] | None:
     data = await websocket.receive_json()
     if data is None:
         await websocket.close(code=1008, reason="No data provided")
@@ -38,6 +40,15 @@ async def authenticate_socket(
     if organization_id is None:
         await websocket.close(code=1008, reason="Organization ID not found")
         return None
+    bot_id = claims.get("bot_id")
+    if bot_id is None:
+        await websocket.close(code=1008, reason="Bot ID not found")
+        return None
+    try:
+        bot_id = uuid.UUID(str(bot_id))
+    except Exception as e:
+        await websocket.close(code=1008, reason=f"Invalid bot ID: {str(e)}")
+        return None
 
     if claims.get("type") == "user":
         session = ChatSession(
@@ -46,7 +57,8 @@ async def authenticate_socket(
             user_socket=websocket,
         )
         active_sessions[conversation_id] = session
-        return session
+        return session,bot_id
+    
 
     if claims.get("type") == "agent":
         session = active_sessions.get(conversation_id)
@@ -59,7 +71,7 @@ async def authenticate_socket(
             return None
 
         session.agent_connect(websocket)
-        return session
+        return session,bot_id
 
     await websocket.close(code=1008, reason="Invalid type")
     return None

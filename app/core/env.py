@@ -32,7 +32,8 @@ def load_app_env() -> str:
     env_local_path = root / ".env.local"
 
     def _safe_load(path: Path, override: bool) -> None:
-        # In some environments (e.g. restricted sandboxes) dotfiles may not be readable.
+        # override false => do not override values from os.environ if it is present
+        # override true => prioritize values from the dotenv file over os.environ
         try:
             load_dotenv(dotenv_path=path, override=override)
         except PermissionError:
@@ -43,9 +44,9 @@ def load_app_env() -> str:
         return "production"
 
     if env_local_path.exists():
+        # if .env.local exists, load it and override values from os.environ
         _safe_load(env_local_path, override=True)
     else:
+        # if .env.local does not exist, load .env and do not override values from os.environ
         _safe_load(env_path, override=False)
-    return "development"
-
-
+    return app_env
