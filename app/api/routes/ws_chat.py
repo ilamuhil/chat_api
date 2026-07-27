@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
@@ -59,20 +60,20 @@ async def chat(websocket: WebSocket, dashboard_db: Session = Depends(get_dashboa
                 id=uuid.uuid4(),
                 conversation_id=session.conversation_id,
                 role="assistant",
-                content=bot.first_message,
+                content=bot_pref["first_message"],
+                updated_at=datetime.now()
             )
             chat_db.add(message)
             chat_db.commit()
         except Exception as e:
             logger.error(f"Error logging first message to database: {str(e)}")
-                
-        
+
         await send_to_end_user({
             "type": "message",
-            "message": bot.first_message,
+            "message": bot_pref["first_message"],
             "role": "assistant",
             "conversation_id": session.conversation_id,
-        },session)
+        }, session)
 
     try:
         while True:
