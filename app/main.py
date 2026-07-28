@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.agent.edu_agent import initialize_agent
 from app.api.middleware.jwt import verify_jwt_middleware
 from app.api.router import api_router
 from app.config.logging_config import setup_logging
@@ -17,11 +19,20 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 logger.info("Logger and env setup complete. Loading Environment", extra={"app_env": os.getenv("APP_ENV")})
-#extra is a dictionary of additional context to be added to the log message. In this setup it will log to the console but not the file.
+
+
+# agent is now accessible as an attribute of the app
+# app can be accessed as an attribute of request context (request.app.state)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with initialize_agent() as agent:
+        app.state.agent = agent
+        yield
+
 
 
 def create_app() -> FastAPI:
-    app = FastAPI()
+    app = FastAPI(lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,

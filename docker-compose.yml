@@ -38,6 +38,14 @@ services:
   workers:
     build: .
     env_file: .env.local
+    develop:
+      watch:
+        - action: rebuild
+          path: ./Dockerfile
+        - action: rebuild
+          path: ./pyproject.toml
+        - action: rebuild
+          path: ./uv.lock
     command: rq worker default
     volumes:
       - .:/code

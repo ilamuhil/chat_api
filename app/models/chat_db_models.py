@@ -62,7 +62,12 @@ class Messages(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(True), nullable=False)
+        DateTime(True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+        server_default=text("now()"),
+        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
     role: Mapped[Optional[str]] = mapped_column(Text)
     content: Mapped[Optional[str]] = mapped_column(String)
     message_feedback: Mapped[list['MessageFeedback']] = relationship(

@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -37,8 +38,8 @@ async def chat(websocket: WebSocket, dashboard_db: Session = Depends(get_dashboa
 
     session, bot_id = metadata
     
-    bot_pref = get_data(f"bot:{bot_id}:config")
-    if bot_pref is None:
+    bot_pref_raw = get_data(f"bot:{bot_id}:config")
+    if not isinstance(bot_pref_raw, dict):
         stmnt = select(Bots).where(Bots.id == bot_id)
         bot = dashboard_db.scalar(stmnt)
         if bot is None:
@@ -53,28 +54,45 @@ async def chat(websocket: WebSocket, dashboard_db: Session = Depends(get_dashboa
             "capture_phone": bot.capture_phone,
         }
         set_data(f"bot:{bot_id}:config", bot_pref)
-    if bot_pref["first_message"] is not None:
-        #log the message to the database
-        try:
-            message = Messages(
-                id=uuid.uuid4(),
-                conversation_id=session.conversation_id,
-                role="assistant",
-                content=bot_pref["first_message"],
-                updated_at=datetime.now()
-            )
-            chat_db.add(message)
-            chat_db.commit()
-        except Exception as e:
-            logger.error(f"Error logging first message to database: {str(e)}")
+    else:
+        bot_pref = bot_pref_raw
 
-        await send_to_end_user({
-            "type": "message",
-            "message": bot_pref["first_message"],
-            "role": "assistant",
-            "conversation_id": session.conversation_id,
-        }, session)
+    first_message = bot_pref.get("first_message") or "Hi, How can I help you today?"
+    greeting_key = f"greeting_sent:{session.conversation_id}"
+    conversation_uuid = uuid.UUID(str(session.conversation_id))
 
+    if get_data(greeting_key) is not True:
+        existing_message = chat_db.scalar(
+            select(Messages.id).where(Messages.conversation_id == conversation_uuid).limit(1)
+        )
+        if existing_message:
+            set_data(greeting_key, True, ttl=None)
+        else:
+            try:
+                message = Messages(
+                    id=uuid.uuid4(),
+                    conversation_id=conversation_uuid,
+                    role="assistant",
+                    content=first_message,
+                    updated_at=datetime.now(),
+                )
+                chat_db.add(message)
+                chat_db.commit()
+                set_data(greeting_key, True, ttl=None)
+                logger.info(f"Sending first message to end user: {first_message}")
+                await send_to_end_user(
+                    {
+                        "type": "message",
+                        "message": first_message,
+                        "role": "assistant",
+                        "conversation_id": session.conversation_id,
+                    },
+                    session,
+                )
+            except Exception as e:
+                chat_db.rollback()
+                logger.exception(f"Error logging first message to database: {e}")
+          
     try:
         while True:
             message_data = await websocket.receive_json()
@@ -97,7 +115,8 @@ async def chat(websocket: WebSocket, dashboard_db: Session = Depends(get_dashboa
                 if session.mode == "human":
                     await send_to_support_agent(message_data, session)
                 elif session.mode == "ai":
-                    await respond_with_ai(message_data, session)
+                    agent:CompiledStateGraph  = websocket.app.state.agent
+                    await respond_with_ai(message_data, session,agent)
 
             # agent -> user
             elif websocket == session.agent_socket:
