@@ -58,7 +58,7 @@ async def respond_with_ai(message_data: dict[str, Any], session: ChatSession, ag
             {"type": "message", "message": answer, "role": "assistant", "conversation_id": session.conversation_id},
         )
     except Exception as e:
-        logger.exception("Error in respond_with_ai")
+        logger.exception("Error in respond_with_ai",extra={"error": e})
         await _send_json_safe(
             session.user_socket,
             {"type": "error", "message": f"AI error: {e}", "conversation_id": session.conversation_id},

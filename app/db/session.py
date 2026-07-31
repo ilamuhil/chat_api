@@ -4,7 +4,7 @@ import os
 from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.env import load_app_env
 
@@ -46,6 +46,7 @@ try:
         pool_size=10,
         max_overflow=20,
         pool_pre_ping=True,
+        pool_recycle=300,
     )
     DashboardDbSessionLocal = sessionmaker(
         autocommit=False, autoflush=False, bind=dashboard_db_engine
@@ -74,6 +75,7 @@ try:
         pool_size=10,
         max_overflow=20,
         pool_pre_ping=True,
+        pool_recycle=300,
     )
     SessionLocal = sessionmaker(
         autocommit=False, autoflush=False, bind=chat_engine
@@ -83,12 +85,22 @@ except Exception:
     pass
 
 
-def get_dashboard_db():
+def create_dashboard_db_session() -> Session:
     if DashboardDbSessionLocal is None:
         raise RuntimeError(
             "Public DB is not configured (DASHBOARD_DB_* env vars missing)."
         )
-    db = DashboardDbSessionLocal()
+    return DashboardDbSessionLocal()
+
+
+def create_chat_db_session() -> Session:
+    if SessionLocal is None:
+        raise RuntimeError("Python chat DB is not configured (CHAT_DB_* env vars missing).")
+    return SessionLocal()
+
+
+def get_dashboard_db():
+    db = create_dashboard_db_session()
     try:
         yield db
     finally:
@@ -96,9 +108,7 @@ def get_dashboard_db():
 
 
 def get_chat_db():
-    if SessionLocal is None:
-        raise RuntimeError("Python chat DB is not configured (CHAT_DB_* env vars missing).")
-    db = SessionLocal()
+    db = create_chat_db_session()
     try:
         yield db
     finally:

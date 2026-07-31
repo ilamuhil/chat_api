@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from app.db.session import get_chat_db, get_dashboard_db
+from app.db.session import create_chat_db_session, create_dashboard_db_session
 from app.domain.chat import ChatSession
 from app.infra.redis_store import get_data, set_data
 from app.models.chat_db_models import Messages
-from app.models.dashboard_db_models import Bots
+from app.models.dashboard_db_models import Bots, Leads
 from app.services.chat import (respond_with_ai, send_to_end_user,
                                send_to_support_agent)
 from app.ws.auth import authenticate_socket
@@ -27,32 +27,89 @@ router = APIRouter()
 ACTIVE_SESSIONS: dict[str, ChatSession] = {}
 
 
+async def send_first_message_once(
+    greeting_key: str,
+    conversation_uuid: uuid.UUID,
+    first_message: str,
+    session: ChatSession,
+) -> None:
+    if get_data(greeting_key) is True:
+        return
+
+    try:
+        with create_chat_db_session() as chat_db:
+            existing_message = chat_db.scalar(
+                select(Messages.id)
+                .where(Messages.conversation_id == conversation_uuid)
+                .limit(1)
+            )
+            if existing_message:
+                set_data(greeting_key, True, ttl=None)
+                return
+
+            message = Messages(
+                id=uuid.uuid4(),
+                conversation_id=conversation_uuid,
+                role="assistant",
+                content=first_message,
+                updated_at=datetime.now(),
+            )
+            chat_db.add(message)
+            chat_db.commit()
+    except Exception:
+        logger.exception("Error logging first message to database")
+        return
+
+    await send_to_end_user(
+    {
+        "type": "typing",
+        "from": "assistant",
+        "is_typing": True,
+        "conversation_id": session.conversation_id,
+    },
+    session,
+)
+
+    await send_to_end_user(
+        {
+            "type": "message",
+            "message": first_message,
+            "role": "assistant",
+            "conversation_id": session.conversation_id,
+        },
+        session,
+    )
+    set_data(greeting_key, True, ttl=None)
+    
+
+
 @router.websocket("/api/chat/ws")
-async def chat(websocket: WebSocket, dashboard_db: Session = Depends(get_dashboard_db), chat_db: Session = Depends(get_chat_db)):
+async def chat(websocket: WebSocket):
     await websocket.accept()
     metadata = await authenticate_socket(websocket, ACTIVE_SESSIONS)
-    #get the data from the bot and store the metadata in redis store and then use it if necessary in the conversation flow. 
     
     if metadata is None:
         return
 
     session, bot_id = metadata
     
+    
+    
     bot_pref_raw = get_data(f"bot:{bot_id}:config")
     if not isinstance(bot_pref_raw, dict):
-        stmnt = select(Bots).where(Bots.id == bot_id)
-        bot = dashboard_db.scalar(stmnt)
-        if bot is None:
-            return
-        bot_pref = {
-            "first_message": bot.first_message,
-            "confirmation_message": bot.confirmation_message,
-            "lead_capture_message": bot.lead_capture_message,
-            "lead_capture_timing": bot.lead_capture_timing,
-            "capture_name": bot.capture_name,
-            "capture_email": bot.capture_email,
-            "capture_phone": bot.capture_phone,
-        }
+        with create_dashboard_db_session() as dashboard_db:
+            bot = dashboard_db.scalar(select(Bots).where(Bots.id == bot_id))
+            if bot is None:
+                return
+            bot_pref = {
+                "first_message": bot.first_message,
+                "confirmation_message": bot.confirmation_message,
+                "lead_capture_message": bot.lead_capture_message,
+                "lead_capture_timing": bot.lead_capture_timing,
+                "capture_name": bot.capture_name,
+                "capture_email": bot.capture_email,
+                "capture_phone": bot.capture_phone,
+            }
         set_data(f"bot:{bot_id}:config", bot_pref)
     else:
         bot_pref = bot_pref_raw
@@ -61,45 +118,116 @@ async def chat(websocket: WebSocket, dashboard_db: Session = Depends(get_dashboa
     greeting_key = f"greeting_sent:{session.conversation_id}"
     conversation_uuid = uuid.UUID(str(session.conversation_id))
 
-    if get_data(greeting_key) is not True:
-        existing_message = chat_db.scalar(
-            select(Messages.id).where(Messages.conversation_id == conversation_uuid).limit(1)
+    with create_dashboard_db_session() as dashboard_db:
+        existing_lead = dashboard_db.scalar(
+            select(Leads.id)
+            .where(Leads.conversation_id == conversation_uuid)
+            .limit(1)
         )
-        if existing_message:
-            set_data(greeting_key, True, ttl=None)
-        else:
-            try:
-                message = Messages(
-                    id=uuid.uuid4(),
-                    conversation_id=conversation_uuid,
-                    role="assistant",
-                    content=first_message,
-                    updated_at=datetime.now(),
-                )
-                chat_db.add(message)
-                chat_db.commit()
-                set_data(greeting_key, True, ttl=None)
-                logger.info(f"Sending first message to end user: {first_message}")
+    
+    form_required = websocket == session.user_socket and existing_lead is None
+
+    try:
+        # Returning users already submitted the form. Skip it and only send the
+        # greeting if this conversation has never received one.
+        if websocket == session.user_socket and not form_required:
+            await send_first_message_once(
+                greeting_key,
+                conversation_uuid,
+                first_message,
+                session,
+            )
+
+        while True:
+            message_data = await websocket.receive_json()
+            msg_type = message_data.get("type") if isinstance(message_data, dict) else None
+
+            logger.debug("WebSocket message received", extra={"type": msg_type})
+            if msg_type == "form_capture":
+                if not form_required:
+                    await send_to_end_user(
+                        {
+                            "type": "form_capture",
+                            "message": "Your details have already been submitted.",
+                            "role": "assistant",
+                            "conversation_id": session.conversation_id,
+                        },
+                        session,
+                    )
+                    continue
+
+                try:
+                    content = message_data.get("content")
+                    if not isinstance(content, str):
+                        raise ValueError("Form capture content must be a string")
+
+                    fields = content.split(":", maxsplit=2)
+                    if len(fields) != 3 or not all(field.strip() for field in fields):
+                        raise ValueError("Form capture content must use name:email:phone")
+
+                    name, email, phone = (field.strip() for field in fields)
+                    lead = Leads(
+                        id=uuid.uuid4(),
+                        name=name,
+                        email=email,
+                        phone=phone,
+                        bot_id=bot_id,
+                        organization_id=session.organization_id,
+                        conversation_id=conversation_uuid,
+                        captured_at=datetime.now(),
+                    )
+                    with create_dashboard_db_session() as dashboard_db:
+                        dashboard_db.add(lead)
+                        dashboard_db.commit()
+                    logger.info(
+                        "Form capture data stored in database",
+                        extra={"conversation_id": session.conversation_id},
+                    )
+                except Exception:
+                    logger.exception("Error storing form capture data in database")
+                    await send_to_end_user(
+                        {
+                            "type": "error",
+                            "message": "Error storing form capture data to database",
+                            "role": "assistant",
+                            "conversation_id": session.conversation_id,
+                        },
+                        session,
+                    )
+                    continue
+
+                form_required = False
                 await send_to_end_user(
                     {
-                        "type": "message",
-                        "message": first_message,
+                        "type": "form_capture",
+                        "message": "Thank you for submitting your details. This chat will continue via email if we get disconnected.",
                         "role": "assistant",
                         "conversation_id": session.conversation_id,
                     },
                     session,
                 )
-            except Exception as e:
-                chat_db.rollback()
-                logger.exception(f"Error logging first message to database: {e}")
-          
-    try:
-        while True:
-            message_data = await websocket.receive_json()
-            msg_type = message_data.get("type") if isinstance(message_data, dict) else None
+                await send_first_message_once(
+                    greeting_key,
+                    conversation_uuid,
+                    first_message,
+                    session,
+                )
+                continue
 
             # end user -> agent/ai
             if websocket == session.user_socket:
+                if form_required:
+                    await send_to_end_user(
+                        {
+                            "type": "form_required",
+                            "message": "Please submit your details before starting the conversation.",
+                            "role": "assistant",
+                            "conversation_id": session.conversation_id,
+                        },
+                        session,
+                    )
+                    continue
+
                 if msg_type == "typing":
                     await send_to_support_agent(
                         {
@@ -133,14 +261,14 @@ async def chat(websocket: WebSocket, dashboard_db: Session = Depends(get_dashboa
                     continue
                 await send_to_end_user(message_data, session)
 
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as e:
         if websocket == session.user_socket:
             session.user_disconnect()
         elif websocket == session.agent_socket:
             session.agent_disconnect()
-        print("Client disconnected")
+        logger.info("Chat session was disconnected", extra={"error": e})
     except Exception as e:
-        print(f"Error: {e}")
+        logger.exception("Error in chat session",extra={"error":e})
     finally:
         await websocket.close()
 
