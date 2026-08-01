@@ -69,6 +69,9 @@ class Messages(Base):
         onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
     )
     role: Mapped[Optional[str]] = mapped_column(Text)
+    content_type: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'text'")
+    )
     content: Mapped[Optional[str]] = mapped_column(String)
     message_feedback: Mapped[list['MessageFeedback']] = relationship(
         'MessageFeedback', back_populates='message')

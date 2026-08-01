@@ -14,7 +14,7 @@ from app.domain.chat import ChatSession
 from app.infra.redis_store import get_data, set_data
 from app.models.chat_db_models import Messages
 from app.models.dashboard_db_models import Bots, Leads
-from app.services.chat import (respond_with_ai, send_to_end_user,
+from app.services.chat import (log_message, respond_with_ai, send_to_end_user,
                                send_to_support_agent)
 from app.ws.auth import authenticate_socket
 
@@ -40,7 +40,11 @@ async def send_first_message_once(
         with create_chat_db_session() as chat_db:
             existing_message = chat_db.scalar(
                 select(Messages.id)
-                .where(Messages.conversation_id == conversation_uuid)
+                .where(
+                    Messages.conversation_id == conversation_uuid,
+                    Messages.role == "assistant",
+                    Messages.content == first_message,
+                )
                 .limit(1)
             )
             if existing_message:
@@ -51,6 +55,7 @@ async def send_first_message_once(
                 id=uuid.uuid4(),
                 conversation_id=conversation_uuid,
                 role="assistant",
+                content_type="text",
                 content=first_message,
                 updated_at=datetime.now(),
             )
@@ -78,9 +83,18 @@ async def send_first_message_once(
             "conversation_id": session.conversation_id,
         },
         session,
+        persist=False,
     )
     set_data(greeting_key, True, ttl=None)
-    
+    await send_to_end_user(
+        {
+            "type": "typing",
+            "from": "assistant",
+            "is_typing": False,
+            "conversation_id": session.conversation_id,
+        },
+        session,
+    )
 
 
 @router.websocket("/api/chat/ws")
@@ -149,7 +163,7 @@ async def chat(websocket: WebSocket):
                         {
                             "type": "form_capture",
                             "message": "Your details have already been submitted.",
-                            "role": "assistant",
+                            "role": "system",
                             "conversation_id": session.conversation_id,
                         },
                         session,
@@ -189,7 +203,7 @@ async def chat(websocket: WebSocket):
                         {
                             "type": "error",
                             "message": "Error storing form capture data to database",
-                            "role": "assistant",
+                            "role": "system",
                             "conversation_id": session.conversation_id,
                         },
                         session,
@@ -201,7 +215,7 @@ async def chat(websocket: WebSocket):
                     {
                         "type": "form_capture",
                         "message": "Thank you for submitting your details. This chat will continue via email if we get disconnected.",
-                        "role": "assistant",
+                        "role": "system",
                         "conversation_id": session.conversation_id,
                     },
                     session,
@@ -221,7 +235,7 @@ async def chat(websocket: WebSocket):
                         {
                             "type": "form_required",
                             "message": "Please submit your details before starting the conversation.",
-                            "role": "assistant",
+                            "role": "system",
                             "conversation_id": session.conversation_id,
                         },
                         session,
@@ -239,6 +253,34 @@ async def chat(websocket: WebSocket):
                         session,
                     )
                     continue
+                
+                elif msg_type == "file":
+                    file_key = message_data.get("message") or message_data.get("content")
+                    if file_key:
+                        await log_message(
+                            session.conversation_id,
+                            "user",
+                            str(file_key),
+                            "file",
+                        )
+                    await send_to_end_user(
+                        {
+                            "type": "message",
+                            "message": "File has been uploaded, a support agent will review it and get back to you soon. If there is anything else I can help you with let me know.",
+                            "role": "system",
+                            "conversation_id": session.conversation_id,
+                        },
+                        session,
+                    )
+                    continue
+
+                user_content = message_data.get("message") or message_data.get("content")
+                if user_content:
+                    await log_message(
+                        session.conversation_id,
+                        "user",
+                        str(user_content),
+                    )
 
                 if session.mode == "human":
                     await send_to_support_agent(message_data, session)
@@ -259,7 +301,12 @@ async def chat(websocket: WebSocket):
                         session,
                     )
                     continue
-                await send_to_end_user(message_data, session)
+                agent_message = {
+                    **message_data,
+                    "role": "assistant",
+                    "conversation_id": session.conversation_id,
+                }
+                await send_to_end_user(agent_message, session)
 
     except WebSocketDisconnect as e:
         if websocket == session.user_socket:

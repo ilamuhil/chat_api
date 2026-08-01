@@ -18,6 +18,7 @@ embedding_model    text
 embedding_version  text
 embedding_provider text
 is_active          boolean DEFAULT true
+deleted_at         timestamptz
 
 UNIQUE (source_id, chunk_index, embedding_model, embedding_version)
   -- uq_documents_source_chunk_model_version
@@ -29,6 +30,7 @@ id          uuid PRIMARY KEY DEFAULT gen_random_uuid()
 document_id uuid NOT NULL UNIQUE REFERENCES documents(id) ON DELETE CASCADE
 embedding   vector(1536) NOT NULL
 created_at  timestamptz NOT NULL DEFAULT now()
+deleted_at  timestamptz
 
 INDEX: embeddings_document_id_idx ON document_id
 UNIQUE: uq_embeddings_document_id ON document_id
@@ -39,8 +41,9 @@ messages
 id              uuid PRIMARY KEY
 conversation_id uuid NOT NULL
 created_at      timestamptz NOT NULL DEFAULT now()
-updated_at      timestamptz NOT NULL
+updated_at      timestamptz NOT NULL DEFAULT now()
 role            text
+content_type    text NOT NULL DEFAULT 'text'  -- text | file
 content         text
 
 

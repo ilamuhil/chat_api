@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Literal
 
 from fastapi import WebSocket
 from langchain.messages import HumanMessage
@@ -9,9 +12,58 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from app.core.env import load_app_env
+from app.db.session import create_chat_db_session
 from app.domain.chat import ChatSession
+from app.models.chat_db_models import Messages
 
 logger = logging.getLogger(__name__)
+
+MessageRole = Literal["user", "assistant", "system"]
+ContentType = Literal["text", "file"]
+
+
+def _persist_message(
+    conversation_id: str,
+    role: MessageRole,
+    content: str,
+    content_type: ContentType,
+) -> None:
+    with create_chat_db_session() as chat_db:
+        chat_db.add(Messages(
+            id=uuid.uuid4(),
+            conversation_id=uuid.UUID(str(conversation_id)),
+            role=role,
+            content_type=content_type,
+            content=content,
+            updated_at=datetime.now(timezone.utc),
+        ))
+        chat_db.commit()
+
+
+async def log_message(
+    conversation_id: str,
+    role: MessageRole,
+    content: str,
+    content_type: ContentType = "text",
+) -> None:
+    try:
+        await asyncio.to_thread(
+            _persist_message,
+            conversation_id,
+            role,
+            content,
+            content_type,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist chat message",
+            extra={
+                "conversation_id": conversation_id,
+                "role": role,
+                "content_type": content_type,
+            },
+        )
+
 
 async def _send_json_safe(socket: WebSocket | None, data: dict[str, Any]) -> None:
     if socket is None:
@@ -23,8 +75,34 @@ async def send_to_support_agent(message_data: dict[str, Any], session: ChatSessi
     await _send_json_safe(session.agent_socket, message_data)
 
 
-async def send_to_end_user(message_data: dict[str, Any], session: ChatSession) -> None:
+async def send_to_end_user(
+    message_data: dict[str, Any],
+    session: ChatSession,
+    *,
+    persist: bool = True,
+) -> None:
     await _send_json_safe(session.user_socket, message_data)
+
+    if not persist or message_data.get("type") == "typing":
+        return
+
+    content = message_data.get("message") or message_data.get("content")
+    if content is None:
+        return
+
+    raw_role = message_data.get("role")
+    role: MessageRole = (
+        raw_role if raw_role in {"user", "assistant", "system"} else "system"
+    )
+    content_type: ContentType = (
+        "file" if message_data.get("type") == "file" else "text"
+    )
+    await log_message(
+        session.conversation_id,
+        role,
+        str(content),
+        content_type,
+    )
 
 
 async def respond_with_ai(message_data: dict[str, Any], session: ChatSession, agent:CompiledStateGraph) -> None:
@@ -52,15 +130,15 @@ async def respond_with_ai(message_data: dict[str, Any], session: ChatSession, ag
         if not answer:
             raise RuntimeError("Agent returned an empty response")
 
-        await _send_json_safe(
-            session.user_socket,
+        await send_to_end_user(
             {"type": "message", "message": answer, "role": "assistant", "conversation_id": session.conversation_id},
+            session,
         )
     except Exception as e:
         logger.exception("Error in respond_with_ai",extra={"error": e})
-        await _send_json_safe(
-            session.user_socket,
-            {"type": "error", "message": f"AI error: {e}", "conversation_id": session.conversation_id},
+        await send_to_end_user(
+            {"type": "error", "message": f"AI error: {e}", "role": "system", "conversation_id": session.conversation_id},
+            session,
         )
     finally:
         await _send_json_safe(
