@@ -7,12 +7,16 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from rq import Queue
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_chat_db, get_dashboard_db
 from app.infra.redis_client import redis_client
-from app.models.chat_db_models import TrainingJobs
+from app.models.chat_db_models import (
+    BotConfigurations,
+    EmbeddingConfigurations,
+    TrainingJobs,
+)
 from app.models.dashboard_db_models import TrainingSources
 from app.services.worker_fns import (delete_training_source_job,
                                      process_training_job)
@@ -33,6 +37,7 @@ async def queue_training(
 
     data = await request.json()
     bot_id = data.get("bot_id")
+
     try:
         bot_uuid = uuid.UUID(str(bot_id))
     except Exception as e:
@@ -45,6 +50,41 @@ async def queue_training(
     
     if existing_job.first():
         return JSONResponse(content={"error": "Training already in progress for this bot"},status_code=409)
+
+    embedding_config = chat_db.scalars(
+        select(EmbeddingConfigurations)
+        .where(
+            EmbeddingConfigurations.bot_id == bot_uuid,
+            EmbeddingConfigurations.state == "active",
+        )
+        .order_by(desc(EmbeddingConfigurations.created_at))
+    ).first()
+    if embedding_config is None:
+        embedding_config = chat_db.scalars(
+            select(EmbeddingConfigurations)
+            .where(
+                EmbeddingConfigurations.bot_id == bot_uuid,
+                EmbeddingConfigurations.state == "draft",
+            )
+            .order_by(desc(EmbeddingConfigurations.created_at))
+        ).first()
+
+    bot_config = None
+    if embedding_config is not None:
+        bot_config = chat_db.scalars(
+            select(BotConfigurations).where(
+                BotConfigurations.bot_id == bot_uuid,
+                BotConfigurations.embedding_configuration_id == embedding_config.id,
+                BotConfigurations.state.in_(["active", "draft"]),
+            )
+            .order_by(desc(BotConfigurations.created_at))
+        ).first()
+
+    if embedding_config is None or bot_config is None:
+        return JSONResponse(
+            content={"error": "No usable model configuration exists for this bot"},
+            status_code=409,
+        )
 
     # Under what statuses should the training source be considered not to be retried for training ?
     # TODO: Once the happy flow is complete, findout the places where failure is non retryable and then add those as Statuses where we skip fetching the sources for training
@@ -63,6 +103,8 @@ async def queue_training(
             organization_id=organization_id,
             bot_id=bot_uuid,
             status="queued",
+            embedding_configuration_id=embedding_config.id,
+            bot_configuration_id=bot_config.id,
         )
         
 
@@ -124,11 +166,37 @@ async def delete_training_source(
         except Exception:
             return JSONResponse(content={"error": "Invalid Bot selected"}, status_code=400)
 
+        embedding_config = chat_db.scalars(
+            select(EmbeddingConfigurations)
+            .where(
+                EmbeddingConfigurations.bot_id == bot_uuid,
+                EmbeddingConfigurations.state == "active",
+            )
+            .order_by(desc(EmbeddingConfigurations.created_at))
+        ).first()
+        bot_config = None
+        if embedding_config is not None:
+            bot_config = chat_db.scalars(
+                select(BotConfigurations).where(
+                    BotConfigurations.bot_id == bot_uuid,
+                    BotConfigurations.embedding_configuration_id == embedding_config.id,
+                    BotConfigurations.state == "active",
+                )
+            ).one_or_none()
+
+        if embedding_config is None or bot_config is None:
+            return JSONResponse(
+                content={"error": "No active model configuration exists for this bot"},
+                status_code=409,
+            )
+
         job = TrainingJobs(
             id=uuid.uuid4(),
             organization_id=claims.get("organization_id"),
             bot_id=bot_uuid,
-            status="queued"
+            status="queued",
+            embedding_configuration_id=embedding_config.id,
+            bot_configuration_id=bot_config.id,
         )
         chat_db.add(job)
         chat_db.commit()

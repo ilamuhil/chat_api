@@ -6,8 +6,9 @@ from logging.config import fileConfig
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from alembic import context
 from sqlalchemy import create_engine, pool
+
+from alembic import context
 
 # Alembic Config object
 config = context.config
@@ -59,6 +60,17 @@ from app.models.chat_db_models import Base  # noqa: E402
 
 target_metadata = Base.metadata
 
+CHECKPOINTER_TABLES = {
+    "checkpoint_migrations",
+    "checkpoints",
+    "checkpoint_writes",
+    "checkpoint_blobs",
+}
+def include_object(object_, name, type_, reflected, compare_to):
+    if type_ == "table" and reflected and name in CHECKPOINTER_TABLES:
+        return False
+    return True
+
 
 def get_url() -> str:
     # Prefer PYTHON_CHAT_DB_* (new), fall back to CHAT_DB_* (legacy/current .env.local).
@@ -80,6 +92,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         compare_server_default=True,
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -96,6 +109,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             compare_server_default=True,
+            include_object=include_object,
         )
 
         with context.begin_transaction():

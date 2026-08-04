@@ -16,7 +16,13 @@ logger = logging.getLogger(__name__)
 _ENCODINGS: dict[str, tiktoken.Encoding] = {}
 
 
-def create_embeddings(chat_session: Session, documents: list[Documents],source_id: str) -> None:
+def create_embeddings(
+    chat_session: Session,
+    documents: list[Documents],
+    source_id: str,
+    model: str = _EMBEDDING_CONFIG["model"],
+    dimensions: int = _EMBEDDING_CONFIG["dimensions"],
+) -> None:
   try:
     #Guard against existing embeddings to prevent duplication and empty documents
     existing = chat_session.scalars(
@@ -31,9 +37,7 @@ def create_embeddings(chat_session: Session, documents: list[Documents],source_i
         logger.info(f"No new documents to embed for source: {source_id}")
         return
 
-    embeddings = OpenAIEmbeddings(
-        model="text-embedding-3-small", dimensions=1536,
-    )
+    embeddings = OpenAIEmbeddings(model=model, dimensions=dimensions)
     vectors = embeddings.embed_documents([cast(str, d.content) for d in documents])
     for i, vector in enumerate[list[float]](vectors):
         chat_session.add(
@@ -52,15 +56,21 @@ def create_embeddings(chat_session: Session, documents: list[Documents],source_i
     )
     raise ValueError("Failed to create embeddings. Please retry.")
   
-def retrieve_closest_embeddings(chat_session: Session, query:list[float], bot_id: UUID, k: int=5, threshold:float = 0.5,CURRENT_MODEL: str=_EMBEDDING_CONFIG["model"], CURRENT_VERSION: str=_EMBEDDING_CONFIG["version"]):
+def retrieve_closest_embeddings(
+    chat_session: Session,
+    query: list[float],
+    bot_id: UUID,
+    embedding_configuration_id: UUID,
+    k: int = 5,
+    threshold: float = 0.5,
+):
   try: 
     distance = Embeddings.embedding.cosine_distance(query)
     stmnt =  select(Embeddings,Documents).join(Documents, Embeddings.document_id == Documents.id).where(
         Documents.bot_id == bot_id,
         Documents.is_active.is_(True),
         Documents.deleted_at.is_(None),
-        Documents.embedding_model == CURRENT_MODEL,
-        Documents.embedding_version == CURRENT_VERSION,
+        Documents.embedding_configuration_id == embedding_configuration_id,
         distance <= threshold
       ).order_by(distance,Documents.chunk_index).limit(k)
     similar_embeddings_with_documents = chat_session.execute(stmnt).all()
