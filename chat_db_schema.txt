@@ -1,43 +1,45 @@
 python chat database schema (from app/models/chat_db_models.py)
 
 PostgreSQL types are shown using their database equivalents. Columns without
-an explicit DEFAULT do not have a server-side default in the model.
+an explicit DEFAULT do not have a server-side default in the model. Python-side
+defaults are noted separately.
 
 
 documents
 ---------
-id                    uuid PRIMARY KEY DEFAULT gen_random_uuid()
-organization_id       text NOT NULL
-bot_id                uuid NOT NULL
-source_id             uuid NOT NULL
-chunk_index           integer NOT NULL
-content               text
-created_at            timestamptz DEFAULT now()
-section_title         text
-token_count           integer
-is_active             boolean DEFAULT true
-deleted_at            timestamptz
-model_config_version_id uuid NOT NULL
+id                         uuid PRIMARY KEY DEFAULT gen_random_uuid()
+organization_id            text NOT NULL
+bot_id                     uuid NOT NULL
+source_id                  uuid NOT NULL
+chunk_index                integer NOT NULL
+content                    text
+created_at                 timestamptz DEFAULT now()
+section_title              text
+token_count                integer
+is_active                  boolean DEFAULT true
+deleted_at                 timestamptz
+embedding_configuration_id uuid NOT NULL
 
-UNIQUE (source_id, model_config_version_id, chunk_index)
+UNIQUE (source_id, embedding_configuration_id, chunk_index)
   -- uq_documents_source_chunk_config_version
 
-INDEX: documents_bot_active_model_config_version_idx
-  ON (bot_id, is_active, model_config_version_id)
+INDEX: documents_bot_active_embedding_configuration_idx
+  ON (bot_id, is_active, embedding_configuration_id)
 INDEX: documents_source_idx
   ON (source_id)
 
 
 messages
 --------
-id                      uuid PRIMARY KEY
-conversation_id         uuid NOT NULL
-created_at              timestamptz DEFAULT now()
-updated_at              timestamptz DEFAULT now()
-role                    text
-content_type            text NOT NULL DEFAULT 'text'
-content                 varchar
-model_config_version_id uuid
+id                         uuid PRIMARY KEY
+conversation_id            uuid NOT NULL
+created_at                 timestamptz DEFAULT now()
+updated_at                 timestamptz DEFAULT now()
+role                       text
+content_type               text NOT NULL DEFAULT 'text'
+content                    varchar
+embedding_configuration_id uuid
+bot_configuration_id       uuid
 
 INDEX: messages_conversation_created_at_idx
   ON (conversation_id, created_at)
@@ -45,20 +47,21 @@ INDEX: messages_conversation_created_at_idx
 
 training_jobs
 -------------
-id                      uuid PRIMARY KEY
-organization_id         text NOT NULL
-bot_id                  uuid NOT NULL
-status                  text NOT NULL
+id                         uuid PRIMARY KEY
+organization_id            text NOT NULL
+bot_id                     uuid NOT NULL
+status                     text NOT NULL
   -- queued, processing, completed, failed, cleanup_completed
-started_at              timestamptz
-completed_at            timestamptz
-error_message           text
-model_config_version_id uuid NOT NULL
+started_at                 timestamptz
+completed_at               timestamptz
+error_message              text
+embedding_configuration_id uuid NOT NULL
+bot_configuration_id       uuid NOT NULL
 
 INDEX: training_jobs_bot_status_idx
   ON (bot_id, status)
-INDEX: training_jobs_model_config_version_idx
-  ON (model_config_version_id)
+INDEX: training_jobs_embedding_configuration_id_idx
+  ON (embedding_configuration_id)
 
 
 embeddings (VECTOR STORE)
@@ -77,33 +80,34 @@ INDEX: embeddings_document_id_idx
 
 retrieval_logs
 --------------
-id                      uuid PRIMARY KEY
-organization_id         text
-bot_id                  uuid
-conversation_id         uuid
-message_id              uuid
-query                   text
-query_embedding         vector(1536)
-retrieved_document_ids  uuid[]
-similarity_scores       double precision[]
-retrieval_threshold     double precision
-retrieval_k              integer
-reranker_used            boolean
-model_config_version_id uuid
-reranked_document_ids   uuid[]
-created_at              timestamptz DEFAULT now()
+id                         uuid PRIMARY KEY
+organization_id            text
+bot_id                     uuid
+conversation_id            uuid
+message_id                 uuid
+query                      text
+query_embedding            vector(1536)
+retrieved_document_ids     uuid[]
+similarity_scores          double precision[]
+retrieval_threshold        double precision
+retrieval_k                integer
+reranker_used              boolean
+embedding_configuration_id uuid
+llm_configuration_id       uuid
+reranked_document_ids      uuid[]
+created_at                 timestamptz DEFAULT now()
 
 INDEX: retrieval_logs_bot_created_at_idx
   ON (bot_id, created_at)
-INDEX: retrieval_logs_model_config_version_idx
-  ON (model_config_version_id)
+INDEX: retrieval_logs_configuration_id_idx
+  ON (embedding_configuration_id, llm_configuration_id)
 
 
 message_feedback
 ----------------
 id         uuid PRIMARY KEY
 message_id uuid
-feedback   text CHECK (feedback IN ('positive', 'negative'))
+feedback   text CHECK (feedback = ANY (ARRAY['positive', 'negative']))
 reason     text
 created_at timestamptz DEFAULT now()
 
@@ -111,44 +115,59 @@ FOREIGN KEY (message_id) REFERENCES messages(id)
   -- message_feedback_message_id_fkey
 
 
-model_config_versions
----------------------
-id                   uuid PRIMARY KEY
+embedding_configurations
+------------------------
+id         uuid PRIMARY KEY
   -- Python-side default: uuid.uuid4
-bot_id               uuid NOT NULL
-version_number       integer NOT NULL
-embedding_provider   text NOT NULL DEFAULT 'openai'
-embedding_model      text NOT NULL
-embedding_version    text
-embedding_dimension  integer NOT NULL DEFAULT 1536
-llm_provider         text NOT NULL
-llm_model            text NOT NULL
-reranker_provider    text
-reranker_model       text
-retrieval_k          integer NOT NULL
-similarity_threshold double precision NOT NULL
-chunk_size           integer NOT NULL
-chunk_overlap       integer NOT NULL
-active               boolean NOT NULL DEFAULT false
-created_by_user_id   uuid
-activated_at         timestamptz
-created_at           timestamptz DEFAULT now()
+bot_id     uuid NOT NULL
+provider   text NOT NULL
+model      text NOT NULL
+version    text
+dimension  integer NOT NULL DEFAULT 1536
+chunk_size integer NOT NULL
+chunk_overlap integer NOT NULL
+state      text NOT NULL DEFAULT 'draft'
+  -- draft, training, active, failed, deprecated
+created_at timestamptz DEFAULT now()
+updated_at timestamptz DEFAULT now()
 
-UNIQUE (bot_id, version_number)
-  -- model_config_version_bot_version_key
+CHECK (chunk_size > 0)
+  -- embedding_config_chunk_size_positive
+CHECK (chunk_overlap >= 0 AND chunk_overlap < chunk_size)
+  -- embedding_config_chunk_overlap_range
+CHECK (dimension > 0)
+  -- embedding_config_dimension_positive
+CHECK (state IN ('draft', 'training', 'active', 'failed', 'deprecated'))
+  -- embedding_config_state_valid
+
+UNIQUE INDEX: embedding_configurations_one_active_per_bot_idx
+  ON (bot_id) WHERE state = 'active'
+
+
+bot_configurations
+------------------
+id                       uuid PRIMARY KEY
+  -- Python-side default: uuid.uuid4
+bot_id                   uuid NOT NULL
+embedding_configuration_id uuid NOT NULL
+provider                 text NOT NULL
+model                    text NOT NULL
+version                  text
+settings                 jsonb
+state                    text NOT NULL DEFAULT 'draft'
+  -- draft, training, active, failed, deprecated
+retrieval_k              integer NOT NULL
+similarity_threshold     double precision NOT NULL
+created_by_user_id       uuid
+created_at               timestamptz DEFAULT now()
+updated_at               timestamptz DEFAULT now()
 
 CHECK (retrieval_k > 0)
-  -- model_config_versions_retrieval_k_positive
+  -- bot_config_retrieval_k_positive
 CHECK (similarity_threshold >= 0.0 AND similarity_threshold <= 1.0)
-  -- model_config_versions_similarity_threshold_range
-CHECK (chunk_size > 0)
-  -- model_config_versions_chunk_size_positive
-CHECK (chunk_overlap >= 0 AND chunk_overlap < chunk_size)
-  -- model_config_versions_chunk_overlap_range
-CHECK (embedding_dimension > 0)
-  -- model_config_versions_embedding_dimension_positive
+  -- bot_config_similarity_threshold_range
+CHECK (state IN ('draft', 'training', 'active', 'failed', 'deprecated'))
+  -- bot_config_state_valid
 
-INDEX: model_config_versions_created_at_idx
-  ON (bot_id, created_at)
-UNIQUE INDEX: model_config_versions_one_active_per_bot_idx
-  ON (bot_id) WHERE active = true
+UNIQUE INDEX: bot_configurations_one_active_per_bot_idx
+  ON (bot_id) WHERE state = 'active'
