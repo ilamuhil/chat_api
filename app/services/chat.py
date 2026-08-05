@@ -14,11 +14,12 @@ from langgraph.graph.state import CompiledStateGraph
 from app.core.env import load_app_env
 from app.db.session import create_chat_db_session
 from app.domain.chat import ChatSession
+from app.infra.redis_store import set_data
 from app.models.chat_db_models import Messages
 
 logger = logging.getLogger(__name__)
 
-MessageRole = Literal["user", "assistant", "system"]
+MessageRole = Literal["user", "ai", "support_agent", "system"]
 ContentType = Literal["text", "file"]
 
 
@@ -28,6 +29,7 @@ def _persist_message(
     content: str,
     content_type: ContentType,
 ) -> None:
+    now = datetime.now(timezone.utc)
     with create_chat_db_session() as chat_db:
         chat_db.add(Messages(
             id=uuid.uuid4(),
@@ -35,9 +37,15 @@ def _persist_message(
             role=role,
             content_type=content_type,
             content=content,
-            updated_at=datetime.now(timezone.utc),
+            updated_at=now,
         ))
         chat_db.commit()
+    #store the last snippet to redis cache along with meta info
+    if content_type == "text":
+        set_data(f"conversation:{conversation_id}:meta",{
+            "last_snippet": content,
+            "last_message_at": now,
+        })    
 
 
 async def log_message(
@@ -54,6 +62,7 @@ async def log_message(
             content,
             content_type,
         )
+        
     except Exception:
         logger.exception(
             "Failed to persist chat message",
@@ -92,7 +101,7 @@ async def send_to_end_user(
 
     raw_role = message_data.get("role")
     role: MessageRole = (
-        raw_role if raw_role in {"user", "assistant", "system"} else "system"
+        raw_role if raw_role in {"user", "ai", "support_agent", "system"} else "system"
     )
     content_type: ContentType = (
         "file" if message_data.get("type") == "file" else "text"
@@ -108,7 +117,7 @@ async def send_to_end_user(
 async def respond_with_ai(message_data: dict[str, Any], session: ChatSession, agent:CompiledStateGraph) -> None:
     await _send_json_safe(
         session.user_socket,
-        {"type": "typing", "from": "assistant", "is_typing": True, "conversation_id": session.conversation_id},
+        {"type": "typing", "from": "system", "is_typing": True},
     )
 
     try:
@@ -131,7 +140,7 @@ async def respond_with_ai(message_data: dict[str, Any], session: ChatSession, ag
             raise RuntimeError("Agent returned an empty response")
 
         await send_to_end_user(
-            {"type": "message", "message": answer, "role": "assistant", "conversation_id": session.conversation_id},
+            {"type": "message", "message": answer, "role": "ai", "conversation_id": session.conversation_id},
             session,
         )
     except Exception as e:
@@ -143,7 +152,7 @@ async def respond_with_ai(message_data: dict[str, Any], session: ChatSession, ag
     finally:
         await _send_json_safe(
             session.user_socket,
-            {"type": "typing", "from": "assistant", "is_typing": False, "conversation_id": session.conversation_id},
+            {"type": "typing", "from": "system", "is_typing": False, "conversation_id": session.conversation_id},
         )
 
 

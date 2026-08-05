@@ -42,7 +42,7 @@ async def send_first_message_once(
                 select(Messages.id)
                 .where(
                     Messages.conversation_id == conversation_uuid,
-                    Messages.role == "assistant",
+                    Messages.role == "system",
                     Messages.content == first_message,
                 )
                 .limit(1)
@@ -54,7 +54,7 @@ async def send_first_message_once(
             message = Messages(
                 id=uuid.uuid4(),
                 conversation_id=conversation_uuid,
-                role="assistant",
+                role="system",
                 content_type="text",
                 content=first_message,
                 updated_at=datetime.now(),
@@ -68,7 +68,7 @@ async def send_first_message_once(
     await send_to_end_user(
     {
         "type": "typing",
-        "from": "assistant",
+        "from": "system",
         "is_typing": True,
         "conversation_id": session.conversation_id,
     },
@@ -79,7 +79,7 @@ async def send_first_message_once(
         {
             "type": "message",
             "message": first_message,
-            "role": "assistant",
+            "role": "system",
             "conversation_id": session.conversation_id,
         },
         session,
@@ -89,7 +89,7 @@ async def send_first_message_once(
     await send_to_end_user(
         {
             "type": "typing",
-            "from": "assistant",
+            "from": "system",
             "is_typing": False,
             "conversation_id": session.conversation_id,
         },
@@ -155,7 +155,18 @@ async def chat(websocket: WebSocket):
         while True:
             message_data = await websocket.receive_json()
             msg_type = message_data.get("type") if isinstance(message_data, dict) else None
-
+            if msg_type == "ping":
+                await websocket.send_json({"type":"pong"})
+            elif msg_type == "end_chat":
+                # if agent is connected then notify agent and disconnect the agent.    
+                if session.agent_socket:
+                    await session.agent_socket.send_json({"type":"end_chat","message":"Chat ended by user"})
+                    await session.agent_socket.close()
+                # if user is connected then notify user and disconnect the user socket
+                if session.user_socket:
+                    await session.user_socket.send_json({"type":"end_chat","message":"Chat ended by user"})
+                    await session.user_socket.close()
+                break
             logger.debug("WebSocket message received", extra={"type": msg_type})
             if msg_type == "form_capture":
                 if not form_required:
@@ -247,7 +258,8 @@ async def chat(websocket: WebSocket):
                         {
                             **message_data,
                             "type": "typing",
-                            "from": "user",
+                            "is_typing": True,
+                            "from": "system",
                             "conversation_id": session.conversation_id,
                         },
                         session,
@@ -280,6 +292,7 @@ async def chat(websocket: WebSocket):
                         session.conversation_id,
                         "user",
                         str(user_content),
+                        "text",
                     )
 
                 if session.mode == "human":
@@ -295,15 +308,15 @@ async def chat(websocket: WebSocket):
                         {
                             **message_data,
                             "type": "typing",
-                            "from": "agent",
-                            "conversation_id": session.conversation_id,
+                            "is_typing": True,
+                            "from": "system",
                         },
                         session,
                     )
                     continue
                 agent_message = {
                     **message_data,
-                    "role": "assistant",
+                    "role": "support_agent",
                     "conversation_id": session.conversation_id,
                 }
                 await send_to_end_user(agent_message, session)

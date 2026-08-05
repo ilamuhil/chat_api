@@ -60,7 +60,7 @@ class Documents(Base):
 
 class Messages(Base):
     __tablename__ = "messages"
-    __table_args__ = (PrimaryKeyConstraint("id", name="messages_pk"),Index(
+    __table_args__ = (PrimaryKeyConstraint("id", name="messages_pk"),CheckConstraint("role IN ('user', 'ai', 'support_agent', 'system')", name="messages_role_valid"),Index(
             "messages_conversation_created_at_idx",
             "conversation_id",
             "created_at",
@@ -74,7 +74,8 @@ class Messages(Base):
         DateTime(True),server_default=text("now()"),
         onupdate=text('now()'),
     )
-    role: Mapped[Optional[str]] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, nullable=True)
     content_type: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'text'")
     )
