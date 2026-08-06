@@ -157,6 +157,7 @@ async def chat(websocket: WebSocket):
             msg_type = message_data.get("type") if isinstance(message_data, dict) else None
             if msg_type == "ping":
                 await websocket.send_json({"type":"pong"})
+                continue
             elif msg_type == "end_chat":
                 # if agent is connected then notify agent and disconnect the agent.    
                 if session.agent_socket:
