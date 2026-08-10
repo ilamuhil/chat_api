@@ -9,7 +9,6 @@ from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config.rag_config import _EMBEDDING_CONFIG
 from app.models.chat_db_models import Documents, Embeddings
 
 logger = logging.getLogger(__name__)
@@ -20,8 +19,8 @@ def create_embeddings(
     chat_session: Session,
     documents: list[Documents],
     source_id: str,
-    model: str = _EMBEDDING_CONFIG["model"],
-    dimensions: int = _EMBEDDING_CONFIG["dimensions"],
+    model: str,
+    dimensions: int,
 ) -> None:
   try:
     #Guard against existing embeddings to prevent duplication and empty documents
@@ -80,10 +79,12 @@ def retrieve_closest_embeddings(
     raise ValueError("Failed to retrieve closest embeddings. Please retry.")
 
 
-def embed_query(query: str, CURRENT_MODEL: str=_EMBEDDING_CONFIG["model"]):
+def embed_query(query: str, model: str, dimensions: int) -> list[float]:
   try:
     embeddings = OpenAIEmbeddings(
-    model=CURRENT_MODEL,dimensions=_EMBEDDING_CONFIG["dimensions"])
+            model=model,
+            dimensions=dimensions,
+        )
     query_vector = embeddings.embed_query(query)
     return query_vector
   except Exception as e:

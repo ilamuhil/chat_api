@@ -12,11 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_chat_db, get_dashboard_db
 from app.infra.redis_client import redis_client
-from app.models.chat_db_models import (
-    BotConfigurations,
-    EmbeddingConfigurations,
-    TrainingJobs,
-)
+from app.models.chat_db_models import (BotConfigurations,
+                                       EmbeddingConfigurations, TrainingJobs)
 from app.models.dashboard_db_models import TrainingSources
 from app.services.worker_fns import (delete_training_source_job,
                                      process_training_job)
@@ -185,8 +182,9 @@ async def delete_training_source(
             ).one_or_none()
 
         if embedding_config is None or bot_config is None:
+            logger.error("No active model configuration exists for this bot", extra={"bot_id": bot_uuid})
             return JSONResponse(
-                content={"error": "No active model configuration exists for this bot"},
+                content={"error": "No active model configuration exists for this bot. Please contact support."},
                 status_code=409,
             )
 

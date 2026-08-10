@@ -3,17 +3,10 @@ from __future__ import annotations
 import datetime
 import enum
 import uuid
+from typing import Optional
 
-from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    DateTime,
-    ForeignKey,
-    Index,
-    String,
-    Text,
-    text,
-)
+from sqlalchemy import (BigInteger, Boolean, DateTime, ForeignKey, Index,
+                        String, Text, text)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -81,6 +74,7 @@ class Bots(Base):
         DateTime(True), nullable=False, server_default=text("now()")
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    institute_name: Mapped[str | None] = mapped_column(Text,nullable=True)
     capture_leads: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )

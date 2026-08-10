@@ -12,7 +12,11 @@ from sqlalchemy import select
 from app.db.session import create_chat_db_session, create_dashboard_db_session
 from app.domain.chat import ChatSession
 from app.infra.redis_store import get_data, set_data
-from app.models.chat_db_models import Messages
+from app.models.chat_db_models import (
+    BotConfigurations,
+    EmbeddingConfigurations,
+    Messages,
+)
 from app.models.dashboard_db_models import Bots, Leads
 from app.services.chat import (log_message, respond_with_ai, send_to_end_user,
                                send_to_support_agent)
@@ -25,6 +29,7 @@ router = APIRouter()
 
 # In-memory map; swap for Redis later if you scale horizontally.
 ACTIVE_SESSIONS: dict[str, ChatSession] = {}
+BOT_PREFS_TTL_SECONDS = 5 * 60
 
 
 async def send_first_message_once(
@@ -107,16 +112,33 @@ async def chat(websocket: WebSocket):
 
     session, bot_id = metadata
     
-    
-    
     bot_pref_raw = get_data(f"bot:{bot_id}:config")
-    if not isinstance(bot_pref_raw, dict):
+    required_bot_pref_keys = {
+        "bot_id",
+        "embedding_configuration_id",
+        "embedding_model",
+        "embedding_dimension",
+        "retrieval_k",
+        "similarity_threshold",
+    }
+    if (
+        not isinstance(bot_pref_raw, dict)
+        or not required_bot_pref_keys.issubset(bot_pref_raw)
+    ):
         with create_dashboard_db_session() as dashboard_db:
             bot = dashboard_db.scalar(select(Bots).where(Bots.id == bot_id))
             if bot is None:
+                logger.error("Bot not found", extra={"bot_id": bot_id})
+                await websocket.send_json({"type":"error","message":"Bot Unavailable"})
+                await websocket.close()
                 return
             bot_pref = {
+                "bot_id": str(bot.id),
                 "first_message": bot.first_message,
+                "name": bot.name,
+                "institute_description": bot.business_description,
+                "tone": bot.tone,
+                "institute_name": bot.institute_name,
                 "confirmation_message": bot.confirmation_message,
                 "lead_capture_message": bot.lead_capture_message,
                 "lead_capture_timing": bot.lead_capture_timing,
@@ -124,13 +146,67 @@ async def chat(websocket: WebSocket):
                 "capture_email": bot.capture_email,
                 "capture_phone": bot.capture_phone,
             }
-        set_data(f"bot:{bot_id}:config", bot_pref)
+            logger.info("Bot preferences set", extra={"bot_id": bot_id})
+            # Get rag/embedding configuration from the database
+            with create_chat_db_session() as chat_db:
+                embedding_config = chat_db.scalars(
+                    select(EmbeddingConfigurations)
+                    .where(
+                        EmbeddingConfigurations.bot_id == bot_id,
+                        EmbeddingConfigurations.state.in_(["active"]),
+                    )
+                    .order_by(EmbeddingConfigurations.created_at.desc())
+                ).first()
+                bot_config = (
+                    chat_db.scalars(
+                        select(BotConfigurations)
+                        .where(
+                            BotConfigurations.bot_id == bot_id,
+                            BotConfigurations.embedding_configuration_id
+                            == embedding_config.id,
+                            BotConfigurations.state.in_(["active"]),
+                        )
+                        .order_by(BotConfigurations.created_at.desc())
+                    ).first()
+                    if embedding_config is not None
+                    else None
+                )
+                if embedding_config is None or bot_config is None:
+                    logger.error(
+                        "Model configuration not found",
+                        extra={"bot_id": bot_id},
+                    )
+                    await websocket.send_json({"type":"error","message":"Could not retrieve required information. Please contact support."})
+                    await websocket.close()
+                    return
+                embedding_pref = {
+                    "embedding_configuration_id": str(embedding_config.id),
+                    "embedding_provider": embedding_config.provider,
+                    "embedding_model": embedding_config.model,
+                    "embedding_version": embedding_config.version,
+                    "embedding_dimension": embedding_config.dimension,
+                    "chunk_size": embedding_config.chunk_size,
+                    "chunk_overlap": embedding_config.chunk_overlap,
+                    "bot_configuration_id": str(bot_config.id),
+                    "llm_provider": bot_config.provider,
+                    "llm_model": bot_config.model,
+                    "retrieval_k": bot_config.retrieval_k,
+                    "similarity_threshold": bot_config.similarity_threshold,
+                }
+                bot_pref.update(embedding_pref)
+                
+        set_data(
+            f"bot:{bot_id}:config",
+            bot_pref,
+            ttl=BOT_PREFS_TTL_SECONDS,
+        )
     else:
         bot_pref = bot_pref_raw
 
     first_message = bot_pref.get("first_message") or "Hi, How can I help you today?"
     greeting_key = f"greeting_sent:{session.conversation_id}"
     conversation_uuid = uuid.UUID(str(session.conversation_id))
+    logger.info("Conversation UUID", extra={"conversation_uuid": conversation_uuid})
 
     with create_dashboard_db_session() as dashboard_db:
         existing_lead = dashboard_db.scalar(
@@ -165,7 +241,7 @@ async def chat(websocket: WebSocket):
                     await session.agent_socket.close()
                 # if user is connected then notify user and disconnect the user socket
                 if session.user_socket:
-                    await session.user_socket.send_json({"type":"end_chat","message":"Chat ended by user"})
+                    await session.user_socket.send_json({"type":"end_chat","message":"Chat ended"})
                     await session.user_socket.close()
                 break
             logger.debug("WebSocket message received", extra={"type": msg_type})
@@ -300,7 +376,7 @@ async def chat(websocket: WebSocket):
                     await send_to_support_agent(message_data, session)
                 elif session.mode == "ai":
                     agent:CompiledStateGraph  = websocket.app.state.agent
-                    await respond_with_ai(message_data, session,agent)
+                    await respond_with_ai(message_data, bot_pref ,session,agent)
 
             # agent -> user
             elif websocket == session.agent_socket:

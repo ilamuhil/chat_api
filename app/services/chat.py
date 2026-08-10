@@ -11,9 +11,11 @@ from langchain.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
+from app.agent.edu_agent import InstituteContext
 from app.core.env import load_app_env
 from app.db.session import create_chat_db_session
 from app.domain.chat import ChatSession
+from app.helpers.rag import embed_query, retrieve_closest_embeddings
 from app.infra.redis_store import set_data
 from app.models.chat_db_models import Messages
 
@@ -40,12 +42,22 @@ def _persist_message(
             updated_at=now,
         ))
         chat_db.commit()
-    #store the last snippet to redis cache along with meta info
+
+    # Redis stores JSON, so convert the datetime to an ISO-8601 string.
     if content_type == "text":
-        set_data(f"conversation:{conversation_id}:meta",{
-            "last_snippet": content,
-            "last_message_at": now,
-        })    
+        try:
+            set_data(
+                f"conversation:{conversation_id}:meta",
+                {
+                    "last_snippet": content,
+                    "last_message_at": now.isoformat(),
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to update conversation metadata in Redis",
+                extra={"conversation_id": conversation_id},
+            )
 
 
 async def log_message(
@@ -114,7 +126,12 @@ async def send_to_end_user(
     )
 
 
-async def respond_with_ai(message_data: dict[str, Any], session: ChatSession, agent:CompiledStateGraph) -> None:
+async def respond_with_ai(
+    message_data: dict[str, Any],
+    bot_pref: dict[str, Any],
+    session: ChatSession,
+    agent: Any,
+) -> None:
     await _send_json_safe(
         session.user_socket,
         {"type": "typing", "from": "system", "is_typing": True},
@@ -127,9 +144,31 @@ async def respond_with_ai(message_data: dict[str, Any], session: ChatSession, ag
             user_text = str(message_data.get("message") or message_data.get("content") or "")
 
         config: RunnableConfig = {"configurable": {"thread_id": session.conversation_id}}
+        #Retrieve RAG context from the database
+        query_vector = await asyncio.to_thread(
+            embed_query,
+            user_text,
+            bot_pref["embedding_model"],
+            int(bot_pref["embedding_dimension"]),
+        )
+        with create_chat_db_session() as chat_db:
+            rows = retrieve_closest_embeddings(
+                chat_db,
+                query_vector,
+                uuid.UUID(str(bot_pref["bot_id"])),
+                uuid.UUID(str(bot_pref["embedding_configuration_id"])),
+                k=int(bot_pref["retrieval_k"]),
+                threshold=float(bot_pref["similarity_threshold"]),
+            )
+            rag_context = "\n\n".join(document.content for _, document in rows)
+
         response = await agent.ainvoke(
             {"messages": [HumanMessage(content=user_text)]},
             config=config,
+            context=InstituteContext(
+                bot_prefs=bot_pref,
+                rag_context=rag_context
+            ),
         )
 
         last_message = response["messages"][-1]
