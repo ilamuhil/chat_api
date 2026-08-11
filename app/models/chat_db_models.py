@@ -6,7 +6,7 @@ from typing import Optional
 
 from pgvector.sqlalchemy.vector import VECTOR
 from sqlalchemy import (ARRAY, Boolean, CheckConstraint, DateTime, Double,
-                        Float, ForeignKeyConstraint, Index, Integer,
+                        ForeignKeyConstraint, Index, Integer,
                         PrimaryKeyConstraint, String, Text, UniqueConstraint,
                         Uuid, text)
 from sqlalchemy.dialects.postgresql import JSONB
@@ -150,48 +150,45 @@ class Embeddings(Base):
 class RetrievalLogs(Base):
     __tablename__ = 'retrieval_logs'
     __table_args__ = (
-        PrimaryKeyConstraint('id', name='retrieval_logs_pkey'),Index(
+        PrimaryKeyConstraint('id', name='retrieval_logs_pkey'),
+        Index(
             "retrieval_logs_bot_created_at_idx",
             "bot_id",
             "created_at",
         ),
         Index(
             "retrieval_logs_configuration_id_idx",
-            "embedding_configuration_id","llm_configuration_id",
+            "embedding_configuration_id",
+            "llm_configuration_id",
         ),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
-    organization_id: Mapped[Optional[str]] = mapped_column(
-        Text,
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid.uuid4
     )
+    organization_id: Mapped[Optional[str]] = mapped_column(Text)
     bot_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
     conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
     message_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
     query: Mapped[Optional[str]] = mapped_column(Text)
-    query_embedding: Mapped[Optional[list[float]]
-                            ] = mapped_column(VECTOR(1536))
     retrieved_document_ids: Mapped[Optional[list[uuid.UUID]]] = mapped_column(
         ARRAY(Uuid)
     )
-    similarity_scores: Mapped[Optional[list[float]]] = mapped_column(
-        ARRAY(Float(precision=53))
-    )
-    retrieval_threshold: Mapped[Optional[float]] = mapped_column(Float(53))
+    # Cosine similarities (1 - cosine_distance), aligned with retrieved_document_ids.
+    similarity_scores: Mapped[Optional[list[float]]] = mapped_column(ARRAY(Double(53)))
+    retrieval_threshold: Mapped[Optional[float]] = mapped_column(Double(53))
     retrieval_k: Mapped[Optional[int]] = mapped_column(Integer)
-    reranker_used: Mapped[Optional[bool]] = mapped_column(Boolean)
-    embedding_configuration_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        Uuid,
-        nullable=True,
+    reranker_used: Mapped[Optional[bool]] = mapped_column(
+        Boolean, server_default=text("false")
     )
-    llm_configuration_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        Uuid,
-        nullable=True,
-    )
+    embedding_configuration_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
+    llm_configuration_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid)
     reranked_document_ids: Mapped[Optional[list[uuid.UUID]]] = mapped_column(
-        ARRAY(Uuid))
+        ARRAY(Uuid)
+    )
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(
-        DateTime(True), server_default=text('now()'))
+        DateTime(True), server_default=text("now()")
+    )
 
 
 class MessageFeedback(Base):

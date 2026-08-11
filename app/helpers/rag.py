@@ -5,7 +5,6 @@ from uuid import UUID
 import numpy as np
 import tiktoken
 from langchain_openai import OpenAIEmbeddings
-from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -62,20 +61,35 @@ def retrieve_closest_embeddings(
     embedding_configuration_id: UUID,
     k: int = 5,
     threshold: float = 0.5,
-):
-  try: 
+) -> list[tuple[Embeddings, Documents, float]]:
+  """Return (embedding, document, cosine_distance) rows for the closest matches.
+
+  ``threshold`` is a minimum cosine similarity in ``[0, 1]``. Rows are kept
+  when ``1 - cosine_distance >= threshold``.
+  """
+  try:
     distance = Embeddings.embedding.cosine_distance(query)
-    stmnt =  select(Embeddings,Documents).join(Documents, Embeddings.document_id == Documents.id).where(
+    max_distance = max(0.0, min(1.0, 1.0 - threshold))
+    stmnt = (
+      select(Embeddings, Documents, distance)
+      .join(Documents, Embeddings.document_id == Documents.id)
+      .where(
         Documents.bot_id == bot_id,
         Documents.is_active.is_(True),
         Documents.deleted_at.is_(None),
         Documents.embedding_configuration_id == embedding_configuration_id,
-        distance <= threshold
-      ).order_by(distance,Documents.chunk_index).limit(k)
-    similar_embeddings_with_documents = chat_session.execute(stmnt).all()
-    return similar_embeddings_with_documents
+        distance <= max_distance,
+      )
+      .order_by(distance, Documents.chunk_index)
+      .limit(k)
+    )
+    rows = chat_session.execute(stmnt).all()
+    return [
+      (embedding, document, float(dist))
+      for embedding, document, dist in rows
+    ]
   except Exception as e:
-    logger.exception("Failed to retrieve closest embeddings",extra={"error": str(e)})  
+    logger.exception("Failed to retrieve closest embeddings",extra={"error": str(e)})
     raise ValueError("Failed to retrieve closest embeddings. Please retry.")
 
 

@@ -32,7 +32,7 @@ async def authenticate_socket(
         {"require": ["exp", "iat", "aud", "iss", "conversation_id", "organization_id", "type"]},
     )
     if claims is None:
-        logger.error("Invalid token", extra={"token": token, "conversation_id": conversation_id})
+        logger.error("Invalid token", extra={"conversation_id": conversation_id})
         await websocket.close(code=1008, reason="Invalid token")
         return None
 

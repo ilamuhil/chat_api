@@ -81,19 +81,21 @@ INDEX: embeddings_document_id_idx
 retrieval_logs
 --------------
 id                         uuid PRIMARY KEY
+  -- Python-side default: uuid.uuid4
 organization_id            text
 bot_id                     uuid
 conversation_id            uuid
 message_id                 uuid
 query                      text
-query_embedding            vector(1536)
 retrieved_document_ids     uuid[]
 similarity_scores          double precision[]
+  -- cosine similarity (1 - cosine_distance), aligned with retrieved_document_ids
 retrieval_threshold        double precision
 retrieval_k                integer
-reranker_used              boolean
+reranker_used              boolean DEFAULT false
 embedding_configuration_id uuid
 llm_configuration_id       uuid
+  -- stores bot_configurations.id used for the LLM turn
 reranked_document_ids      uuid[]
 created_at                 timestamptz DEFAULT now()
 

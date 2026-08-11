@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 import jwt
 from jwt.types import Options
+
+logger = logging.getLogger(__name__)
 
 
 def _load_public_key() -> bytes | None:
@@ -31,16 +34,26 @@ def _load_public_key() -> bytes | None:
     return None
 
 
-PUBLIC_KEY = _load_public_key()
+_UNSET = object()
+_PUBLIC_KEY: Any = _UNSET
 
 
-def verify_token(token: str, options: Options | None) -> dict[str, Any] | None:
+def get_public_key() -> bytes | None:
+    global _PUBLIC_KEY
+    # Reload if unset or previously failed (e.g. file not ready at first import).
+    if _PUBLIC_KEY is _UNSET or _PUBLIC_KEY is None:
+        _PUBLIC_KEY = _load_public_key()
+    return _PUBLIC_KEY
+
+
+def verify_token(token: str, options: Options | None = None) -> dict[str, Any] | None:
     try:
-        if not PUBLIC_KEY:
+        public_key = get_public_key()
+        if not public_key:
             raise RuntimeError("public.pem not found or empty")
         claims = jwt.decode(
             token,
-            PUBLIC_KEY,
+            public_key,
             algorithms=["RS256"],
             options=options,
             audience="chat-server",
@@ -48,13 +61,16 @@ def verify_token(token: str, options: Options | None) -> dict[str, Any] | None:
         )
         return claims
     except jwt.ExpiredSignatureError as e:
-        print(f"Token expired: {e}")
+        logger.warning("Token expired", extra={"error": str(e)})
         return None
     except jwt.InvalidTokenError as e:
-        print(f"Invalid token: {e}")
+        logger.warning(
+            "Invalid token",
+            extra={"error": str(e), "error_type": type(e).__name__},
+        )
         return None
     except Exception as e:
-        print(f"Error verifying token: {e}")
+        logger.exception("Error verifying token", extra={"error": str(e)})
         return None
 
 
