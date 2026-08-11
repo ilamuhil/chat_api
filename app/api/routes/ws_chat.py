@@ -7,22 +7,13 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from langgraph.graph.state import CompiledStateGraph
 
 from app.domain.chat import ChatSession
-from app.services.chat import (
-    log_message,
-    respond_with_ai,
-    send_to_end_user,
-    send_to_support_agent,
-    send_typing_to_end_user,
-    send_typing_to_support_agent,
-)
+from app.services.chat import (log_message, respond_with_ai, send_to_end_user,
+                               send_to_support_agent, send_typing_to_end_user,
+                               send_typing_to_support_agent)
 from app.ws.auth import authenticate_socket
-from app.ws.handlers import (
-    conversation_has_lead,
-    end_chat_session,
-    handle_form_capture,
-    load_bot_prefs,
-    send_first_message_once,
-)
+from app.ws.handlers import (conversation_has_lead, end_chat_session,
+                             handle_form_capture, load_bot_prefs,
+                             send_first_message_once)
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +24,7 @@ router = APIRouter()
 ACTIVE_SESSIONS: dict[str, ChatSession] = {}
 
 
-@router.websocket("/api/chat/ws")
+@router.websocket("/chat/ws")
 async def chat(websocket: WebSocket):
     await websocket.accept()
     metadata = await authenticate_socket(websocket, ACTIVE_SESSIONS)

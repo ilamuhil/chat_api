@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/api/training/queue")
+@router.post("/training/queue")
 async def queue_training(
     request: Request,
     dashboard_db: Session = Depends(get_dashboard_db),

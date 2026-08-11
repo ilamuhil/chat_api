@@ -68,7 +68,7 @@ async def authenticate_socket(
         return session,bot_id
     
 
-    if claims.get("type") == "agent":
+    if claims.get("type") == "support_agent":
         session = active_sessions.get(conversation_id)
         if session is None:
             logger.error("Session not found for the conversation", extra={"conversation_id": conversation_id})
