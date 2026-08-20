@@ -57,7 +57,7 @@ def verify_token(token: str, options: Options | None = None) -> dict[str, Any] |
             algorithms=["RS256"],
             options=options,
             audience="chat-server",
-            issuer="next-server",
+            issuer="dashboard-server",
         )
         return claims
     except jwt.ExpiredSignatureError as e:

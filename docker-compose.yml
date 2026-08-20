@@ -46,7 +46,7 @@ services:
           path: ./pyproject.toml
         - action: rebuild
           path: ./uv.lock
-    command: rq worker default
+    command: rq worker default --with-scheduler
     volumes:
       - .:/code
     working_dir: /code

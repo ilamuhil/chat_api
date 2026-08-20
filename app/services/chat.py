@@ -17,7 +17,8 @@ from app.db.session import create_chat_db_session
 from app.domain.chat import ChatSession
 from app.helpers.rag import embed_query, retrieve_closest_embeddings
 from app.infra.redis_store import set_data
-from app.models.chat_db_models import Documents, Embeddings, Messages, RetrievalLogs
+from app.models.chat_db_models import (Documents, Embeddings, Messages,
+                                       RetrievalLogs)
 
 logger = logging.getLogger(__name__)
 
@@ -320,15 +321,39 @@ async def respond_with_ai(
                 reranker_used=False,
             )
 
+            logger.info(
+                "Starting agent invocation",
+                extra={
+                    "conversation_id": str(session.conversation_id),
+                    "message_length": len(user_text),
+                    "has_rag_context": bool(rag_context.strip()),
+                },
+            )
             response = await agent.ainvoke(
                 {"messages": [HumanMessage(content=user_text)]},
                 config=config,
                 context=InstituteContext(
                     bot_prefs=bot_pref,
-                    rag_context=rag_context
+                    rag_context=rag_context,
+                    conversation_id=uuid.UUID(str(session.conversation_id))
                 ),
             )
 
+            response_messages = response.get("messages", [])
+            tool_calls = [
+                tool_call.get("name")
+                for message in response_messages
+                for tool_call in (getattr(message, "tool_calls", None) or [])
+                if isinstance(tool_call, dict)
+            ]
+            logger.info(
+                "Agent invocation completed",
+                extra={
+                    "conversation_id": str(session.conversation_id),
+                    "message_count": len(response_messages),
+                    "tool_calls": tool_calls,
+                },
+            )
             last_message = response["messages"][-1]
             answer = _extract_message_text(last_message)
             if not answer:

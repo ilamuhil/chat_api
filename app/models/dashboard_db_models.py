@@ -378,8 +378,8 @@ class ConversationsMeta(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True), nullable=False, server_default=text("now()")
     )
-    mode: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'ai'"))
-    organization_id: Mapped[str | None] = mapped_column(
+    mode: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'ai'"))  #! ai | human
+    organization_id: Mapped[str] = mapped_column(
         ForeignKey("public.organizations.id", ondelete="CASCADE")
     )
     bot_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -390,7 +390,13 @@ class ConversationsMeta(Base):
     )
     user_name: Mapped[str | None] = mapped_column(Text)
     user_email: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'open'"))
+    #! open | closed
+    handover_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'none'"))
+    #! none | requested | accepted | timed_out
+    closed_by: Mapped[str | None] = mapped_column(Text)
+    #! visitor | support_agent | system | admin (admin -> when org disabled or bot deleted or other circumstances)
+    closed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
     last_message_snippet: Mapped[str | None] = mapped_column(Text)
     last_message_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
 

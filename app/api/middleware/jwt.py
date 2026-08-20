@@ -5,8 +5,13 @@ from fastapi.responses import JSONResponse
 
 from app.core.jwt import verify_token
 
-
-PUBLIC_PATHS = {"/docs", "/openapi.json", "/redoc", "/api/health"}
+PUBLIC_PATHS = {
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+    "/api/health",
+    "/api/notifications/events",
+}
 
 
 async def verify_jwt_middleware(request: Request, call_next):
