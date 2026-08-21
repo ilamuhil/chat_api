@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from redis.asyncio import Redis
@@ -18,18 +19,21 @@ redis = Redis.from_url(
 )
 
 
-@router.get("/notifications/events", description="Listen to subscribed changes in redis pubsub and send it to dashboard client as an event stream for notifications")
+@router.get(
+    "/notifications/events",
+    description="Listen to subscribed changes in redis pubsub and send it to dashboard client as an event stream for notifications",
+)
 async def get_notifications_events(
     token: str,
 ):
     claims = verify_token(token)
     if claims is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    org_id = claims.get("organization_id")  
+    org_id = claims.get("organization_id")
     pubsub = redis.pubsub()
     org_notifications_channel = f"org_notifications:{org_id}"
     await pubsub.subscribe(org_notifications_channel)
-    
+
     async def stream_notifications():
         try:
             async for message in pubsub.listen():
@@ -46,8 +50,10 @@ async def get_notifications_events(
                     continue
 
                 event_type = event.get("type")
+                event_id = event.get("id")
                 if event_type in {"handover_request", "handover_timeout"}:
                     yield (
+                        f"id: {event_id}\n"
                         f"event: {event_type}\n"
                         f"data: {json.dumps(event)}\n\n"
                     )

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import WebSocket
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db.session import create_chat_db_session, create_dashboard_db_session
 from app.domain.chat import ChatSession
@@ -16,7 +16,7 @@ from app.models.chat_db_models import (
     EmbeddingConfigurations,
     Messages,
 )
-from app.models.dashboard_db_models import Bots, Leads
+from app.models.dashboard_db_models import Bots, ConversationsMeta, Leads
 from app.services.chat import (
     end_user_typing,
     send_to_end_user,
@@ -68,7 +68,7 @@ async def send_first_message_once(
                     role="system",
                     content_type="text",
                     content=first_message,
-                    updated_at=datetime.now(),
+                    updated_at=datetime.now(UTC),
                 )
                 chat_db.add(message)
                 chat_db.commit()
@@ -178,9 +178,7 @@ async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | 
 def conversation_has_lead(conversation_uuid: uuid.UUID) -> bool:
     with create_dashboard_db_session() as dashboard_db:
         existing_lead = dashboard_db.scalar(
-            select(Leads.id)
-            .where(Leads.conversation_id == conversation_uuid)
-            .limit(1)
+            select(Leads.id).where(Leads.conversation_id == conversation_uuid).limit(1)
         )
     return existing_lead is not None
 
@@ -211,7 +209,7 @@ async def handle_form_capture(
     try:
         content = message_data.get("content")
         if not isinstance(content, str):
-            raise ValueError("Form capture content must be a string")
+            raise TypeError("Form capture content must be a string")
 
         fields = content.split(":", maxsplit=2)
         if len(fields) != 3 or not all(field.strip() for field in fields):
@@ -226,7 +224,7 @@ async def handle_form_capture(
             bot_id=bot_id,
             organization_id=session.organization_id,
             conversation_id=conversation_uuid,
-            captured_at=datetime.now(),
+            captured_at=datetime.now(UTC),
         )
         with create_dashboard_db_session() as dashboard_db:
             dashboard_db.add(lead)
@@ -269,6 +267,16 @@ async def handle_form_capture(
 async def end_chat_session(session: ChatSession) -> None:
     await send_typing_to_end_user(session, False)
     await send_typing_to_support_agent(session, False)
+    with create_dashboard_db_session() as dashboard_db:
+        dashboard_db.execute(
+            update(ConversationsMeta)
+            .where(
+                ConversationsMeta.id == session.conversation_id,
+            )
+            .values(
+                status="closed",
+            )
+        )
     if session.agent_socket:
         await session.agent_socket.send_json(
             {"type": "end_chat", "message": "Chat ended by user"}

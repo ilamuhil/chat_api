@@ -1,19 +1,30 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from langgraph.graph.state import CompiledStateGraph
 
-from app.domain.chat import ChatSession
-from app.services.chat import (log_message, respond_with_ai, send_to_end_user,
-                               send_to_support_agent, send_typing_to_end_user,
-                               send_typing_to_support_agent)
+from app.services.chat import (
+    log_message,
+    respond_with_ai,
+    send_to_end_user,
+    send_to_support_agent,
+    send_typing_to_end_user,
+    send_typing_to_support_agent,
+)
 from app.ws.auth import authenticate_socket
-from app.ws.handlers import (conversation_has_lead, end_chat_session,
-                             handle_form_capture, load_bot_prefs,
-                             send_first_message_once)
+from app.ws.handlers import (
+    conversation_has_lead,
+    end_chat_session,
+    handle_form_capture,
+    load_bot_prefs,
+    send_first_message_once,
+)
+from app.ws.registry import ACTIVE_SESSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +32,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # In-memory map; swap for Redis later if you scale horizontally.
-ACTIVE_SESSIONS: dict[str, ChatSession] = {}
 
 
 @router.websocket("/chat/ws")
@@ -43,10 +53,37 @@ async def chat(websocket: WebSocket):
     conversation_uuid = uuid.UUID(str(session.conversation_id))
     logger.info("Conversation UUID", extra={"conversation_uuid": conversation_uuid})
 
-    form_required = (
-        websocket == session.user_socket
-        and not conversation_has_lead(conversation_uuid)
+    form_required = websocket == session.user_socket and not conversation_has_lead(
+        conversation_uuid
     )
+    ai_queue: asyncio.Queue[dict[str, Any]] | None = None
+    ai_worker_task: asyncio.Task[None] | None = None
+
+    if websocket == session.user_socket:
+        ai_queue = asyncio.Queue()
+
+        async def process_ai_queue() -> None:
+            while True:
+                queued_message = await ai_queue.get()
+                try:
+                    agent: CompiledStateGraph = websocket.app.state.agent
+                    await respond_with_ai(
+                        queued_message,
+                        bot_pref,
+                        session,
+                        agent,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Error processing queued AI message",
+                        extra={"conversation_id": session.conversation_id},
+                    )
+                finally:
+                    ai_queue.task_done()
+
+        ai_worker_task = asyncio.create_task(process_ai_queue())
 
     try:
         # Returning users already submitted the form. Skip it and only send the
@@ -61,7 +98,9 @@ async def chat(websocket: WebSocket):
 
         while True:
             message_data = await websocket.receive_json()
-            msg_type = message_data.get("type") if isinstance(message_data, dict) else None
+            msg_type = (
+                message_data.get("type") if isinstance(message_data, dict) else None
+            )
             if msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
                 continue
@@ -102,7 +141,9 @@ async def chat(websocket: WebSocket):
                     continue
 
                 elif msg_type == "file":
-                    file_key = message_data.get("message") or message_data.get("content")
+                    file_key = message_data.get("message") or message_data.get(
+                        "content"
+                    )
                     if file_key:
                         await log_message(
                             session.conversation_id,
@@ -121,7 +162,9 @@ async def chat(websocket: WebSocket):
                     )
                     continue
 
-                user_content = message_data.get("message") or message_data.get("content")
+                user_content = message_data.get("message") or message_data.get(
+                    "content"
+                )
                 if user_content:
                     await log_message(
                         session.conversation_id,
@@ -134,8 +177,8 @@ async def chat(websocket: WebSocket):
                     await send_typing_to_support_agent(session, False)
                     await send_to_support_agent(message_data, session)
                 elif session.mode == "ai":
-                    agent: CompiledStateGraph = websocket.app.state.agent
-                    await respond_with_ai(message_data, bot_pref, session, agent)
+                    if ai_queue is not None:
+                        await ai_queue.put(message_data)
 
             # agent -> user
             elif websocket == session.agent_socket:
@@ -163,4 +206,10 @@ async def chat(websocket: WebSocket):
     except Exception as e:
         logger.exception("Error in chat session", extra={"error": e})
     finally:
+        if ai_worker_task is not None:
+            ai_worker_task.cancel()
+            try:
+                await ai_worker_task
+            except asyncio.CancelledError:
+                pass
         await websocket.close()

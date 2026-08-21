@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,14 +13,17 @@ from app.api.middleware.jwt import verify_jwt_middleware
 from app.api.router import api_router
 from app.config.logging_config import setup_logging
 from app.core.env import load_app_env
-from app.infra.redis_store import get_data
+from app.ws.runtime_events import listen_for_runtime_events
 
 # load env and setup logging configuration
 load_app_env()
 setup_logging()
 logger = logging.getLogger(__name__)
 
-logger.info("Logger and env setup complete. Loading Environment", extra={"app_env": os.getenv("APP_ENV")})
+logger.info(
+    "Logger and env setup complete. Loading Environment",
+    extra={"app_env": os.getenv("APP_ENV")},
+)
 
 
 # agent is now accessible as an attribute of the app
@@ -30,8 +34,20 @@ logger.info("Logger and env setup complete. Loading Environment", extra={"app_en
 async def lifespan(app: FastAPI):
     async with initialize_agent() as agent:
         app.state.agent = agent
-        yield
-
+        runtime_events_task: asyncio.Task[None] | None = None
+        try:
+            runtime_events_task = asyncio.create_task(listen_for_runtime_events())
+            yield
+        except Exception as e:
+            logger.exception(
+                "Error in listening for runtime events", extra={"error": str(e)}
+            )
+            raise
+        finally:
+            if runtime_events_task is not None:
+                runtime_events_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await runtime_events_task
 
 
 def create_app() -> FastAPI:
@@ -51,4 +67,3 @@ def create_app() -> FastAPI:
 
 app = create_app()
 logger.info("Fast API App started Successfully")
-

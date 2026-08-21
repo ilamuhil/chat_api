@@ -29,7 +29,17 @@ async def authenticate_socket(
 
     claims = verify_token(
         token,
-        {"require": ["exp", "iat", "aud", "iss", "conversation_id", "organization_id", "type"]},
+        {
+            "require": [
+                "exp",
+                "iat",
+                "aud",
+                "iss",
+                "conversation_id",
+                "organization_id",
+                "type",
+            ]
+        },
     )
     if claims is None:
         logger.error("Invalid token", extra={"conversation_id": conversation_id})
@@ -37,13 +47,21 @@ async def authenticate_socket(
         return None
 
     if claims.get("conversation_id") != conversation_id:
-        logger.error("Conversation mismatch", extra={"conversation_id": conversation_id, "expected": claims.get("conversation_id")})
+        logger.error(
+            "Conversation mismatch",
+            extra={
+                "conversation_id": conversation_id,
+                "expected": claims.get("conversation_id"),
+            },
+        )
         await websocket.close(code=1008, reason="Conversation mismatch")
         return None
-    
-    organization_id = claims.get("organization_id") 
+
+    organization_id = claims.get("organization_id")
     if organization_id is None:
-        logger.error("Organization ID not found", extra={"conversation_id": conversation_id})
+        logger.error(
+            "Organization ID not found", extra={"conversation_id": conversation_id}
+        )
         await websocket.close(code=1008, reason="Organization ID not found")
         return None
     bot_id = claims.get("bot_id")
@@ -53,9 +71,12 @@ async def authenticate_socket(
         return None
     try:
         bot_id = uuid.UUID(str(bot_id))
-    except Exception as e:
-        logger.error("Invalid bot ID", extra={"conversation_id": conversation_id, "error": str(e)})
-        await websocket.close(code=1008, reason=f"Invalid bot ID: {str(e)}")
+    except (ValueError, AttributeError, TypeError) as e:
+        logger.error(
+            "Invalid bot ID",
+            extra={"conversation_id": conversation_id, "error": str(e)},
+        )
+        await websocket.close(code=1008, reason=f"Invalid bot ID: {e!s}")
         return None
 
     if claims.get("type") == "user":
@@ -65,25 +86,32 @@ async def authenticate_socket(
             user_socket=websocket,
         )
         active_sessions[conversation_id] = session
-        return session,bot_id
-    
+        return session, bot_id
 
     if claims.get("type") == "support_agent":
         session = active_sessions.get(conversation_id)
         if session is None:
-            logger.error("Session not found for the conversation", extra={"conversation_id": conversation_id})
+            logger.error(
+                "Session not found for the conversation",
+                extra={"conversation_id": conversation_id},
+            )
             await websocket.close(code=1008, reason="Session not found")
             return None
 
         if session.organization_id != claims.get("organization_id"):
-            logger.error("Organization mismatch", extra={"conversation_id": conversation_id, "expected": session.organization_id, "actual": claims.get("organization_id")})
+            logger.error(
+                "Organization mismatch",
+                extra={
+                    "conversation_id": conversation_id,
+                    "expected": session.organization_id,
+                    "actual": claims.get("organization_id"),
+                },
+            )
             await websocket.close(code=1008, reason="Unauthorized Organization Access")
             return None
 
         session.agent_connect(websocket)
-        return session,bot_id
+        return session, bot_id
 
     await websocket.close(code=1008, reason="Invalid type")
     return None
-
-

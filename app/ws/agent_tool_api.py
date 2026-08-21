@@ -132,10 +132,11 @@ async def update_conversation_handover_status(
             },
         )
         return False
-        
+
+
 def agent_handover_timeout_handler(conversation_id: str) -> None:
     conversation_uuid = uuid.UUID(conversation_id)
-    conversation = _get_conversation_sync(conversation_uuid,open_only=True)
+    conversation = _get_conversation_sync(conversation_uuid, open_only=True)
     if conversation is None:
         return
 
@@ -145,7 +146,7 @@ def agent_handover_timeout_handler(conversation_id: str) -> None:
         return
 
     published, _ = _publish_to_channel_sync(
-        f"org_notifications:{conversation.organization_id}",
+        "chat_runtime_events",
         json.dumps(
             {
                 "type": "handover_timeout",

@@ -3,10 +3,18 @@ from __future__ import annotations
 import datetime
 import enum
 import uuid
-from typing import Optional
+from typing import ClassVar
 
-from sqlalchemy import (BigInteger, Boolean, DateTime, ForeignKey, Index,
-                        String, Text, text)
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -29,7 +37,7 @@ class OtpPurpose(str, enum.Enum):
 
 class Organizations(Base):
     __tablename__ = "organizations"
-    __table_args__ = {"schema": "public"}
+    __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
@@ -45,27 +53,29 @@ class Organizations(Base):
     phone: Mapped[str | None] = mapped_column(Text)
     email_token: Mapped[str | None] = mapped_column(Text)
 
-    bots: Mapped[list["Bots"]] = relationship("Bots", back_populates="organization")
-    organization_members: Mapped[list["OrganizationMembers"]] = relationship(
+    bots: Mapped[list[Bots]] = relationship("Bots", back_populates="organization")
+    organization_members: Mapped[list[OrganizationMembers]] = relationship(
         "OrganizationMembers", back_populates="organization"
     )
-    invites: Mapped[list["OrganizationInvites"]] = relationship(
+    invites: Mapped[list[OrganizationInvites]] = relationship(
         "OrganizationInvites", back_populates="organization"
     )
-    api_keys: Mapped[list["ApiKeys"]] = relationship("ApiKeys", back_populates="organization")
-    files: Mapped[list["Files"]] = relationship("Files", back_populates="organization")
-    training_sources: Mapped[list["TrainingSources"]] = relationship(
+    api_keys: Mapped[list[ApiKeys]] = relationship(
+        "ApiKeys", back_populates="organization"
+    )
+    files: Mapped[list[Files]] = relationship("Files", back_populates="organization")
+    training_sources: Mapped[list[TrainingSources]] = relationship(
         "TrainingSources", back_populates="organization"
     )
-    conversations_meta: Mapped[list["ConversationsMeta"]] = relationship(
+    conversations_meta: Mapped[list[ConversationsMeta]] = relationship(
         "ConversationsMeta", back_populates="organization"
     )
-    leads: Mapped[list["Leads"]] = relationship("Leads", back_populates="organization")
+    leads: Mapped[list[Leads]] = relationship("Leads", back_populates="organization")
 
 
 class Bots(Base):
     __tablename__ = "bots"
-    __table_args__ = {"schema": "public"}
+    __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=text("gen_random_uuid()")
@@ -74,7 +84,7 @@ class Bots(Base):
         DateTime(True), nullable=False, server_default=text("now()")
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    institute_name: Mapped[str | None] = mapped_column(Text,nullable=True)
+    institute_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     capture_leads: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
@@ -91,24 +101,30 @@ class Bots(Base):
     confirmation_message: Mapped[str | None] = mapped_column(Text)
     lead_capture_message: Mapped[str | None] = mapped_column(Text)
     lead_capture_timing: Mapped[str | None] = mapped_column(Text)
-    capture_name: Mapped[bool | None] = mapped_column(Boolean, server_default=text("false"))
-    capture_email: Mapped[bool | None] = mapped_column(Boolean, server_default=text("false"))
-    capture_phone: Mapped[bool | None] = mapped_column(Boolean, server_default=text("false"))
+    capture_name: Mapped[bool | None] = mapped_column(
+        Boolean, server_default=text("false")
+    )
+    capture_email: Mapped[bool | None] = mapped_column(
+        Boolean, server_default=text("false")
+    )
+    capture_phone: Mapped[bool | None] = mapped_column(
+        Boolean, server_default=text("false")
+    )
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
     deleted_by: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    organization: Mapped["Organizations | None"] = relationship(
+    organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="bots"
     )
-    api_keys: Mapped[list["ApiKeys"]] = relationship("ApiKeys", back_populates="bot")
-    files: Mapped[list["Files"]] = relationship("Files", back_populates="bot")
-    training_sources: Mapped[list["TrainingSources"]] = relationship(
+    api_keys: Mapped[list[ApiKeys]] = relationship("ApiKeys", back_populates="bot")
+    files: Mapped[list[Files]] = relationship("Files", back_populates="bot")
+    training_sources: Mapped[list[TrainingSources]] = relationship(
         "TrainingSources", back_populates="bot"
     )
-    conversations_meta: Mapped[list["ConversationsMeta"]] = relationship(
+    conversations_meta: Mapped[list[ConversationsMeta]] = relationship(
         "ConversationsMeta", back_populates="bot"
     )
-    leads: Mapped[list["Leads"]] = relationship("Leads", back_populates="bot")
+    leads: Mapped[list[Leads]] = relationship("Leads", back_populates="bot")
 
 
 class Users(Base):
@@ -157,17 +173,21 @@ class Users(Base):
     last_logged_in: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
     last_logged_in_ip: Mapped[str | None] = mapped_column(String)
 
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
-    is_banned: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    is_banned: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     banned_until: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
     onboarding_completed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
 
-    organization_members: Mapped[list["OrganizationMembers"]] = relationship(
+    organization_members: Mapped[list[OrganizationMembers]] = relationship(
         "OrganizationMembers", back_populates="user"
     )
-    otps: Mapped[list["Otps"]] = relationship("Otps", back_populates="user")
+    otps: Mapped[list[Otps]] = relationship("Otps", back_populates="user")
 
 
 class OrganizationMembers(Base):
@@ -192,10 +212,12 @@ class OrganizationMembers(Base):
         ForeignKey("public.users.id", ondelete="CASCADE")
     )
 
-    organization: Mapped["Organizations | None"] = relationship(
+    organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="organization_members"
     )
-    user: Mapped["Users | None"] = relationship("Users", back_populates="organization_members")
+    user: Mapped[Users | None] = relationship(
+        "Users", back_populates="organization_members"
+    )
 
 
 class OrganizationInvites(Base):
@@ -213,13 +235,17 @@ class OrganizationInvites(Base):
         ForeignKey("public.organizations.id", ondelete="CASCADE"), nullable=False
     )
     email: Mapped[str] = mapped_column(Text, nullable=False)
-    role: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'editor'"))
+    role: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'editor'")
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True), nullable=False, server_default=text("now()")
     )
     accepted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
 
-    organization: Mapped["Organizations"] = relationship("Organizations", back_populates="invites")
+    organization: Mapped[Organizations] = relationship(
+        "Organizations", back_populates="invites"
+    )
 
 
 class Otps(Base):
@@ -250,25 +276,25 @@ class Otps(Base):
     email: Mapped[str | None] = mapped_column(String)
     phone: Mapped[str | None] = mapped_column(String)
 
-    expires_at: Mapped[datetime.datetime] = mapped_column(DateTime(True), nullable=False)
+    expires_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(True), nullable=False
+    )
     used_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
-    is_used: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    is_used: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
-    attempts: Mapped[int] = mapped_column(
-        nullable=False, server_default=text("0")
-    )
-    max_attempts: Mapped[int] = mapped_column(
-        nullable=False, server_default=text("5")
-    )
+    attempts: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
+    max_attempts: Mapped[int] = mapped_column(nullable=False, server_default=text("5"))
     ip_address: Mapped[str | None] = mapped_column(String)
     user_agent: Mapped[str | None] = mapped_column(Text)
 
-    user: Mapped["Users | None"] = relationship("Users", back_populates="otps")
+    user: Mapped[Users | None] = relationship("Users", back_populates="otps")
 
 
 class ApiKeys(Base):
     __tablename__ = "api_keys"
-    __table_args__ = {"schema": "public"}
+    __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=text("gen_random_uuid()")
@@ -289,11 +315,11 @@ class ApiKeys(Base):
         DateTime(True), server_default=text("now()")
     )
 
-    bot: Mapped["Bots | None"] = relationship("Bots", back_populates="api_keys")
-    organization: Mapped["Organizations | None"] = relationship(
+    bot: Mapped[Bots | None] = relationship("Bots", back_populates="api_keys")
+    organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="api_keys"
     )
-    conversations_meta: Mapped[list["ConversationsMeta"]] = relationship(
+    conversations_meta: Mapped[list[ConversationsMeta]] = relationship(
         "ConversationsMeta", back_populates="api_key"
     )
 
@@ -326,8 +352,8 @@ class Files(Base):
     purpose: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str | None] = mapped_column(Text)
 
-    bot: Mapped["Bots | None"] = relationship("Bots", back_populates="files")
-    organization: Mapped["Organizations | None"] = relationship(
+    bot: Mapped[Bots | None] = relationship("Bots", back_populates="files")
+    organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="files"
     )
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
@@ -336,7 +362,7 @@ class Files(Base):
 
 class TrainingSources(Base):
     __tablename__ = "training_sources"
-    __table_args__ = {"schema": "public"}
+    __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=text("gen_random_uuid()")
@@ -360,17 +386,16 @@ class TrainingSources(Base):
     mime_type: Mapped[str | None] = mapped_column(Text)
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
     deleted_by: Mapped[str | None] = mapped_column(Text, nullable=True)
-    
-    bot: Mapped["Bots | None"] = relationship("Bots", back_populates="training_sources")
-    organization: Mapped["Organizations | None"] = relationship(
+
+    bot: Mapped[Bots | None] = relationship("Bots", back_populates="training_sources")
+    organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="training_sources"
     )
-    
 
 
 class ConversationsMeta(Base):
     __tablename__ = "conversations_meta"
-    __table_args__ = {"schema": "public"}
+    __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=text("gen_random_uuid()")
@@ -378,7 +403,9 @@ class ConversationsMeta(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True), nullable=False, server_default=text("now()")
     )
-    mode: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'ai'"))  #! ai | human
+    mode: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'ai'")
+    )  # ! ai | human
     organization_id: Mapped[str] = mapped_column(
         ForeignKey("public.organizations.id", ondelete="CASCADE")
     )
@@ -390,27 +417,33 @@ class ConversationsMeta(Base):
     )
     user_name: Mapped[str | None] = mapped_column(Text)
     user_email: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'open'"))
-    #! open | closed
-    handover_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'none'"))
-    #! none | requested | accepted | timed_out
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'open'")
+    )
+    # ! open | closed
+    handover_status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'none'")
+    )
+    # ! none | requested | accepted | timed_out
     closed_by: Mapped[str | None] = mapped_column(Text)
-    #! visitor | support_agent | system | admin (admin -> when org disabled or bot deleted or other circumstances)
+    # ! visitor | support_agent | system | admin (admin -> when org disabled or bot deleted or other circumstances)
     closed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
     last_message_snippet: Mapped[str | None] = mapped_column(Text)
     last_message_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
 
-    api_key: Mapped["ApiKeys | None"] = relationship("ApiKeys", back_populates="conversations_meta")
-    bot: Mapped["Bots | None"] = relationship("Bots", back_populates="conversations_meta")
-    organization: Mapped["Organizations | None"] = relationship(
+    api_key: Mapped[ApiKeys | None] = relationship(
+        "ApiKeys", back_populates="conversations_meta"
+    )
+    bot: Mapped[Bots | None] = relationship("Bots", back_populates="conversations_meta")
+    organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="conversations_meta"
     )
-    leads: Mapped[list["Leads"]] = relationship("Leads", back_populates="conversation")
+    leads: Mapped[list[Leads]] = relationship("Leads", back_populates="conversation")
 
 
 class Leads(Base):
     __tablename__ = "leads"
-    __table_args__ = {"schema": "public"}
+    __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=text("gen_random_uuid()")
@@ -431,11 +464,10 @@ class Leads(Base):
         ForeignKey("public.conversations_meta.id", ondelete="SET NULL")
     )
 
-    bot: Mapped["Bots | None"] = relationship("Bots", back_populates="leads")
-    conversation: Mapped["ConversationsMeta | None"] = relationship(
+    bot: Mapped[Bots | None] = relationship("Bots", back_populates="leads")
+    conversation: Mapped[ConversationsMeta | None] = relationship(
         "ConversationsMeta", back_populates="leads"
     )
-    organization: Mapped["Organizations | None"] = relationship(
+    organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="leads"
     )
-

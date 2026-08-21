@@ -1,5 +1,6 @@
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any
@@ -19,9 +20,12 @@ from rq import Queue
 
 from app.domain.chat_context import InstituteContext
 from app.infra.redis_client import redis_client
-from app.ws.agent_tool_api import (agent_handover_timeout_handler,
-                                   get_conversation, publish_to_channel,
-                                   update_conversation_handover_status)
+from app.ws.agent_tool_api import (
+    agent_handover_timeout_handler,
+    get_conversation,
+    publish_to_channel,
+    update_conversation_handover_status,
+)
 
 user = os.getenv("CHAT_DB_USERNAME")
 password = os.getenv("CHAT_DB_PASSWORD")
@@ -43,23 +47,25 @@ def require_value(value: str | None, name: str) -> str:
         raise RuntimeError(f"{name} is required")
     return value.strip()
 
+
 @dynamic_prompt
 def inject_prompt_context(request: ModelRequest[InstituteContext]) -> str:
     context = request.runtime.context
 
-
-    if context.bot_prefs.get('institute_description'):
+    if context.bot_prefs.get("institute_description"):
         institute_desc_text = f"Short description of the Institute: {context.bot_prefs.get('institute_description')}"
     else:
         institute_desc_text = ""
 
     capture_leads_text = ""
-    if context.bot_prefs.get('capture_leads'):
-        name_text = "Name" if context.bot_prefs.get('capture_name') else ""
-        email_text = "Email address" if context.bot_prefs.get('capture_email') else ""
-        phone_text = "Phone number" if context.bot_prefs.get('capture_phone') else ""
+    if context.bot_prefs.get("capture_leads"):
+        name_text = "Name" if context.bot_prefs.get("capture_name") else ""
+        email_text = "Email address" if context.bot_prefs.get("capture_email") else ""
+        phone_text = "Phone number" if context.bot_prefs.get("capture_phone") else ""
         if any([name_text, email_text, phone_text]):
-            capture_leads_text = "- Collect following details from the user naturally:\n"
+            capture_leads_text = (
+                "- Collect following details from the user naturally:\n"
+            )
             if name_text:
                 capture_leads_text += f"{name_text}\n"
             if email_text:
@@ -68,7 +74,7 @@ def inject_prompt_context(request: ModelRequest[InstituteContext]) -> str:
                 capture_leads_text += f"{phone_text}\n"
         else:
             capture_leads_text = ""
-        
+
     if context.rag_context:
         rag_context_text = f"\n\nApproved Reference Information:\n{context.rag_context}"
     else:
@@ -101,7 +107,14 @@ def inject_prompt_context(request: ModelRequest[InstituteContext]) -> str:
         
         {rag_context_text}
         """
-    return agent_prompt.format(institute_name=context.bot_prefs.get("institute_name","the institute"),tone=context.bot_prefs.get("tone","professional"),name=context.bot_prefs.get("name","Admissions Assistant"),institute_desc_text=institute_desc_text,capture_leads_text=capture_leads_text,rag_context_text=rag_context_text)
+    return agent_prompt.format(
+        institute_name=context.bot_prefs.get("institute_name", "the institute"),
+        tone=context.bot_prefs.get("tone", "professional"),
+        name=context.bot_prefs.get("name", "Admissions Assistant"),
+        institute_desc_text=institute_desc_text,
+        capture_leads_text=capture_leads_text,
+        rag_context_text=rag_context_text,
+    )
 
 
 @tool(
@@ -135,9 +148,9 @@ async def agent_handover_request(
             extra={"conversation_id": str(conversation_id)},
         )
         return {
-            "ok":False,
+            "ok": False,
             "code": "CONVERSATION_NOT_FOUND",
-            "message": "This conversation is not valid for agent handover"
+            "message": "This conversation is not valid for agent handover",
         }
     if conversation.handover_status == "requested":
         logger.info(
@@ -145,9 +158,9 @@ async def agent_handover_request(
             extra={"conversation_id": str(conversation_id)},
         )
         return {
-            "ok":True,
+            "ok": True,
             "code": "HANDOVER_REQUESTED",
-            "message": "Searching for a counsellor please wait..."
+            "message": "Searching for a counsellor please wait...",
         }
     elif conversation.handover_status == "timed_out":
         logger.info(
@@ -155,12 +168,12 @@ async def agent_handover_request(
             extra={"conversation_id": str(conversation_id)},
         )
         return {
-            "ok":False,
+            "ok": False,
             "code": "HANDOVER_TIMED_OUT",
-            "message": "The request to handover the conversation to a counsellor timed out. A counsellor will follow up with you via email."
+            "message": "The request to handover the conversation to a counsellor timed out. A counsellor will follow up with you via email.",
         }
     else:
-        #update the conversation_handover_status to "requested"
+        # update the conversation_handover_status to "requested"
         logger.info(
             "Updating handover status to requested",
             extra={
@@ -189,11 +202,11 @@ async def agent_handover_request(
                     "message": "Searching for a counsellor please wait...",
                 }
             return {
-                "ok":False,
+                "ok": False,
                 "code": "DATABASE_UPDATE_FAILED",
-                "message": "Failed to handover the conversation to a counsellor. Please contact support."
+                "message": "Failed to handover the conversation to a counsellor. Please contact support.",
             }
-        #run function agent_handover_timeout_handler after 30 seconds
+        # run function agent_handover_timeout_handler after 30 seconds
         try:
             queue = Queue("default", connection=redis_client)
             timeout_job = queue.enqueue_in(
@@ -219,14 +232,14 @@ async def agent_handover_request(
                 "ok": False,
                 "code": "TIMEOUT_SCHEDULE_FAILED",
                 "message": (
-                    "The counsellor request could not be scheduled. "
-                    "Please try again."
+                    "The counsellor request could not be scheduled. Please try again."
                 ),
             }
         # publish a message to the redis pubsub channel
         organization_id = conversation.organization_id
         channel_key = f"org_notifications:{organization_id}"
-        data = { 
+        data = {
+            "id": str(uuid.uuid4()),
             "type": "handover_request",
             "conversation_id": str(conversation_id),
         }
@@ -240,9 +253,9 @@ async def agent_handover_request(
                 },
             )
             return {
-                "ok":False,
+                "ok": False,
                 "code": "PUBLISH_FAILED",
-                "message": "Failed to handover the conversation to a human counsellor. Please contact support."
+                "message": "Failed to handover the conversation to a human counsellor. Please contact support.",
             }
         logger.info(
             "Handover notification published",
@@ -259,7 +272,7 @@ async def agent_handover_request(
                 "You will be notified when someone accepts it."
             ),
         }
-    
+
 
 @asynccontextmanager
 async def initialize_agent():
@@ -269,8 +282,6 @@ async def initialize_agent():
     db_port = require_value(port, "CHAT_DB_PORT")
     db_name = require_value(name, "CHAT_DB_NAME")
     api_key = require_value(openai_api_key, "OPENAI_API_KEY")
-
-
 
     db_uri = (
         f"postgresql://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
@@ -295,7 +306,6 @@ async def initialize_agent():
         await pool.open()
         checkpointer = AsyncPostgresSaver(pool)
         await checkpointer.setup()
-
 
         openai_model = ChatOpenAI(
             model=MODEL,

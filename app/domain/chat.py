@@ -28,5 +28,3 @@ class ChatSession(BaseModel):
 
     def user_disconnect(self):
         self.user_socket = None
-
-

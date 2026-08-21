@@ -3,9 +3,13 @@ from __future__ import annotations
 import os
 
 from redis import Redis
-
+from redis.asyncio import Redis as AsyncRedis
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+
+async def get_async_redis() -> AsyncRedis:
+    return AsyncRedis.from_url(REDIS_URL, decode_responses=True)
 
 
 def get_redis() -> Redis:
@@ -26,4 +30,3 @@ if __name__ == "__main__":
         mapping={"name": "John", "surname": "Smith", "company": "Redis", "age": 29},
     )
     print(c.hgetall("user-session:123"))
-
