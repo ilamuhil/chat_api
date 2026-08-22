@@ -16,6 +16,7 @@ from app.services.chat import (
     send_typing_to_end_user,
     send_typing_to_support_agent,
 )
+from app.ws.agent_tool_api import get_conversation
 from app.ws.auth import authenticate_socket
 from app.ws.handlers import (
     conversation_has_lead,
@@ -38,7 +39,6 @@ router = APIRouter()
 async def chat(websocket: WebSocket):
     await websocket.accept()
     metadata = await authenticate_socket(websocket, ACTIVE_SESSIONS)
-
     if metadata is None:
         return
 
@@ -97,6 +97,22 @@ async def chat(websocket: WebSocket):
             )
 
         while True:
+            # if conversation is closed disconnect the websocket
+            try:
+                conversation = await get_conversation(
+                    conversation_uuid, open_only=False
+                )
+                if conversation is not None and conversation.status == "closed":
+                    await end_chat_session(
+                        session, closed_by="system", already_closed=True
+                    )
+                    break
+            except Exception:
+                logger.exception(
+                    "Could not find an open conversation",
+                    extra={"conversation_id": conversation_uuid},
+                )
+                break
             message_data = await websocket.receive_json()
             msg_type = (
                 message_data.get("type") if isinstance(message_data, dict) else None

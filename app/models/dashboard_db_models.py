@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import enum
 import uuid
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from sqlalchemy import (
     BigInteger,
@@ -290,6 +290,37 @@ class Otps(Base):
     user_agent: Mapped[str | None] = mapped_column(Text)
 
     user: Mapped[Users | None] = relationship("Users", back_populates="otps")
+
+
+class Notifications(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index(
+            "notifications_user_id_read_at_created_at_idx",
+            "user_id",
+            "read_at",
+            text("created_at DESC"),
+        ),
+        {"schema": "public"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    organization_id: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("public.users.id", ondelete="CASCADE")
+    )
+    title: Mapped[str | None] = mapped_column(Text)
+    body: Mapped[str | None] = mapped_column(Text)
+    type: Mapped[str | None] = mapped_column(Text)
+    read_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(True), nullable=False, server_default=text("now()")
+    )
+    # "metadata" is reserved by SQLAlchemy's declarative base.
+    metadata_json: Mapped[Any | None] = mapped_column("metadata", JSONB)
+    channels: Mapped[Any | None] = mapped_column(JSONB)
 
 
 class ApiKeys(Base):

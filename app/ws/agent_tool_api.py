@@ -7,7 +7,7 @@ import uuid
 from typing import Any, cast
 
 from redis.exceptions import RedisError
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.engine import CursorResult
 
 from app.db.session import create_dashboard_db_session
@@ -15,6 +15,50 @@ from app.infra.redis_client import redis_client
 from app.models.dashboard_db_models import ConversationsMeta
 
 logger = logging.getLogger(__name__)
+
+
+def _request_handover_sync(
+    conversation_id: uuid.UUID,
+) -> bool:
+    with create_dashboard_db_session() as session:
+        result = cast(
+            CursorResult[Any],
+            session.execute(
+                update(ConversationsMeta)
+                .where(
+                    ConversationsMeta.id == conversation_id,
+                    ConversationsMeta.status == "open",
+                    or_(
+                        ConversationsMeta.handover_status == "none",
+                        ConversationsMeta.handover_status.is_(None),
+                    ),
+                )
+                .values(handover_status="requested")
+            ),
+        )
+
+        if result.rowcount != 1:
+            session.rollback()
+            return False
+
+        session.commit()
+        return True
+
+
+async def request_conversation_handover(
+    conversation_id: uuid.UUID,
+) -> bool:
+    try:
+        return await asyncio.to_thread(
+            _request_handover_sync,
+            conversation_id,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to request conversation handover",
+            extra={"conversation_id": str(conversation_id)},
+        )
+        return False
 
 
 def _get_conversation_sync(
@@ -31,8 +75,12 @@ def _get_conversation_sync(
         return session.execute(statement).scalar_one_or_none()
 
 
-async def get_conversation(conversation_id: uuid.UUID) -> ConversationsMeta | None:
-    return await asyncio.to_thread(_get_conversation_sync, conversation_id)
+async def get_conversation(
+    conversation_id: uuid.UUID, open_only: bool = True
+) -> ConversationsMeta | None:
+    return await asyncio.to_thread(
+        _get_conversation_sync, conversation_id, open_only=open_only
+    )
 
 
 def _publish_to_channel_sync(

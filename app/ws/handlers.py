@@ -23,6 +23,10 @@ from app.services.chat import (
     send_typing_to_end_user,
     send_typing_to_support_agent,
 )
+from app.services.notifications import (
+    create_notifications,
+    publish_notifications,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -216,8 +220,10 @@ async def handle_form_capture(
             raise ValueError("Form capture content must use name:email:phone")
 
         name, email, phone = (field.strip() for field in fields)
+        lead_id = uuid.uuid4()
+
         lead = Leads(
-            id=uuid.uuid4(),
+            id=lead_id,
             name=name,
             email=email,
             phone=phone,
@@ -233,6 +239,33 @@ async def handle_form_capture(
             "Form capture data stored in database",
             extra={"conversation_id": session.conversation_id},
         )
+        try:
+            lead_notifications = await create_notifications(
+                organization_id=session.organization_id,
+                notification_type="lead_captured",
+                title="New lead captured",
+                body="A new visitor lead has been captured.",
+                metadata={
+                    "leadId": str(lead_id),
+                    "conversationId": str(conversation_uuid),
+                    "botId": str(bot_id),
+                },
+            )
+
+            await publish_notifications(
+                organization_id=session.organization_id,
+                notifications=lead_notifications,
+            )
+        except Exception:
+            # Lead capture itself succeeded. The lead still appears on
+            # the dashboard even if notification creation fails.
+            logger.exception(
+                "Failed to create lead capture notifications",
+                extra={
+                    "lead_id": str(lead_id),
+                    "conversation_id": str(conversation_uuid),
+                },
+            )
     except Exception:
         logger.exception("Error storing form capture data in database")
         await send_to_end_user(
@@ -264,26 +297,37 @@ async def handle_form_capture(
     return False
 
 
-async def end_chat_session(session: ChatSession) -> None:
+async def end_chat_session(
+    session: ChatSession, closed_by: str | None = "system", already_closed: bool = False
+) -> None:
     await send_typing_to_end_user(session, False)
     await send_typing_to_support_agent(session, False)
-    with create_dashboard_db_session() as dashboard_db:
-        dashboard_db.execute(
-            update(ConversationsMeta)
-            .where(
-                ConversationsMeta.id == session.conversation_id,
+    if not already_closed:
+        with create_dashboard_db_session() as dashboard_db:
+            dashboard_db.execute(
+                update(ConversationsMeta)
+                .where(ConversationsMeta.id == session.conversation_id)
+                .values(
+                    status="closed", closed_by=closed_by, closed_at=datetime.now(UTC)
+                )
             )
-            .values(
-                status="closed",
-            )
-        )
     if session.agent_socket:
         await session.agent_socket.send_json(
             {"type": "end_chat", "message": "Chat ended by user"}
         )
-        await session.agent_socket.close()
+        await session.agent_socket.close(
+            code=1000,
+            reason="This conversation is closed"
+            if already_closed
+            else f"Chat ended by {closed_by}",
+        )
     if session.user_socket:
         await session.user_socket.send_json(
             {"type": "end_chat", "message": "Chat ended"}
         )
-        await session.user_socket.close()
+        await session.user_socket.close(
+            code=1000,
+            reason="This conversation is closed"
+            if already_closed
+            else f"Chat ended by {closed_by}",
+        )
