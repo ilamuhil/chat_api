@@ -321,6 +321,7 @@ class Notifications(Base):
     # "metadata" is reserved by SQLAlchemy's declarative base.
     metadata_json: Mapped[Any | None] = mapped_column("metadata", JSONB)
     channels: Mapped[Any | None] = mapped_column(JSONB)
+    # ! email | sms | webhook | dashboard
 
 
 class ApiKeys(Base):
@@ -472,6 +473,41 @@ class ConversationsMeta(Base):
     leads: Mapped[list[Leads]] = relationship("Leads", back_populates="conversation")
 
 
+class LeadFollowUps(Base):
+    __tablename__ = "lead_follow_ups"
+    __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    counsellor_id: Mapped[uuid.UUID | None] = mapped_column()
+    follow_up_type: Mapped[str | None] = mapped_column(Text)
+    # ! callback | demo | campus_visit | application_follow_up | send_course_details | review_elligibility | other
+    status: Mapped[str | None] = mapped_column(Text)
+    # ! pending | complete | cancelled
+    scheduled_for: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
+    outcome: Mapped[str | None] = mapped_column(Text)
+    # ! contacted | not_interested | interested | no_answer | follow_up_again | application_started | enrolled | lost
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(True),
+        nullable=False,
+        server_default=text("now()"),
+        onupdate=text("now()"),
+    )
+    lead_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("public.leads.id", ondelete="CASCADE"), nullable=False
+    )
+    deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
+    deleted_by_id: Mapped[uuid.UUID | None] = mapped_column()
+
+    lead: Mapped[Leads] = relationship("Leads", back_populates="lead_follow_ups")
+
+
 class Leads(Base):
     __tablename__ = "leads"
     __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
@@ -479,12 +515,45 @@ class Leads(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=text("gen_random_uuid()")
     )
+    name: Mapped[str | None] = mapped_column(Text) # ! enquirer name
+    email: Mapped[str | None] = mapped_column(Text)
+    phone: Mapped[str | None] = mapped_column(Text)
+    enquirer_type: Mapped[str | None] = mapped_column(Text)
+    # ! parent | guardian | student | friend | relative | other
+    student_name: Mapped[str | None] = mapped_column(Text)
+    student_age: Mapped[str | None] = mapped_column(Text)
+    student_gender: Mapped[str | None] = mapped_column(Text)
+    course_interest: Mapped[str | None] = mapped_column(Text)
+    education_level: Mapped[str | None] = mapped_column(Text)
+    preferred_mode: Mapped[str | None] = mapped_column(Text)
+    # ! online | offline | both
+    joining_timeline: Mapped[str | None] = mapped_column(Text)
+    # ! immediate | within_1_week | within_1_month | within_3_months | beyond_3_months
+    primary_intent: Mapped[str | None] = mapped_column(Text)
+    # ! course_info | course_recommendation | elligibility | fees | batch_or_schedule | application | counselling | demo | campus_visit | general_enquiry | other
+    lead_priority: Mapped[str | None] = mapped_column(Text)
+    # ! hot | warm | cold
+    priority_reason: Mapped[str | None] = mapped_column(Text)
+    ai_summary: Mapped[str | None] = mapped_column(Text)
+    recommended_next_action: Mapped[str | None] = mapped_column(Text)
+    # ! schedule_callback | schedule_demo | schedule_campus_visit | application_follow_up | send_course_details | review_elligibility | other
+    pipeline_stage: Mapped[str | None] = mapped_column(Text)
+    # ! new_enquiry | qualified | counselling_requested | contacted | application_started | enrolled | lost
+    consent_to_contact: Mapped[bool | None] = mapped_column(
+        Boolean, server_default=text("false")
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(True),
+        nullable=False,
+        server_default=text("now()"),
+        onupdate=text("now()"),
+    )
     captured_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True), nullable=False, server_default=text("now()")
     )
-    name: Mapped[str | None] = mapped_column(Text)
-    email: Mapped[str | None] = mapped_column(Text)
-    phone: Mapped[str | None] = mapped_column(Text)
+    deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
+    deleted_by_id: Mapped[uuid.UUID | None] = mapped_column()
+    visitor_id: Mapped[uuid.UUID | None] = mapped_column()
     organization_id: Mapped[str | None] = mapped_column(
         ForeignKey("public.organizations.id", ondelete="CASCADE")
     )
@@ -501,4 +570,7 @@ class Leads(Base):
     )
     organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="leads"
+    )
+    lead_follow_ups: Mapped[list[LeadFollowUps]] = relationship(
+        "LeadFollowUps", back_populates="lead"
     )
