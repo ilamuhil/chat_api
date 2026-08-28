@@ -69,7 +69,9 @@ chat_env/
 chat_venv/
 
 # IDEs / editors
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea/
 
 # OS files

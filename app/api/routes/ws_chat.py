@@ -55,23 +55,15 @@ async def chat(websocket: WebSocket):
     conversation_uuid = uuid.UUID(str(session.conversation_id))
     logger.info("Conversation UUID", extra={"conversation_uuid": conversation_uuid})
 
-    visitor_uuid: uuid.UUID | None = None
-    lead_id: uuid.UUID | None = None
-    form_required = False
-    if websocket == session.user_socket:
-        try:
-            visitor_uuid = uuid.UUID(str(session.visitor_id))
-        except (ValueError, AttributeError, TypeError):
-            logger.exception(
-                "Error parsing visitor UUID", extra={"visitor_id": session.visitor_id}
-            )
-            return
-        lead_exists, lead_id = has_lead(
-            visitor_uuid,
-            bot_id,
-            session.organization_id,
+    try:
+        visitor_uuid = uuid.UUID(str(session.visitor_id))
+    except Exception:
+        logger.exception(
+            "Error parsing visitor UUID", extra={"visitor_id": session.visitor_id}
         )
-        form_required = not lead_exists
+        return
+    lead_exists, lead_id = has_lead(visitor_uuid, bot_id, session.organization_id)
+    form_required = websocket == session.user_socket and not lead_exists
     ai_queue: asyncio.Queue[dict[str, Any]] | None = None
     ai_worker_task: asyncio.Task[None] | None = None
 
@@ -105,7 +97,8 @@ async def chat(websocket: WebSocket):
         # Returning users already submitted the form. Skip it and only send the
         # greeting if this conversation has never received one.
         if websocket == session.user_socket and not form_required:
-            if lead_id is not None:
+            # Returning visitor already has a lead; attach it to this conversation.
+            if lead_exists and lead_id is not None:
                 await associate_lead_with_conversation(conversation_uuid, lead_id)
             await send_first_message_once(
                 greeting_key,

@@ -293,11 +293,26 @@ async def handle_form_capture(
         )
         with create_dashboard_db_session() as dashboard_db:
             dashboard_db.add(lead)
-            dashboard_db.execute(
-                update(ConversationsMeta)
-                .where(ConversationsMeta.id == conversation_uuid)
-                .values(lead_id=lead_id),
+            dashboard_db.flush()
+            result = cast(
+                CursorResult[Any],
+                dashboard_db.execute(
+                    update(ConversationsMeta)
+                    .where(ConversationsMeta.id == conversation_uuid)
+                    .values(lead_id=lead_id),
+                ),
             )
+            if result.rowcount != 1:
+                logger.error(
+                    "Failed to associate lead with conversation",
+                    extra={
+                        "conversation_id": conversation_uuid,
+                        "lead_id": lead_id,
+                        "rowcount": result.rowcount,
+                    },
+                )
+                dashboard_db.rollback()
+                return True
             dashboard_db.commit()
         logger.info(
             "Form capture data stored in database",
