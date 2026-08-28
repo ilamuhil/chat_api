@@ -243,7 +243,13 @@ async def log_retrieval(
 async def _send_json_safe(socket: WebSocket | None, data: dict[str, Any]) -> None:
     if socket is None:
         return
-    await socket.send_json(data)
+    try:
+        await socket.send_json(data)
+    except RuntimeError:
+        # The peer can disconnect between the socket check and this send.
+        # Cleanup notifications, such as typing=False, must not mask that
+        # disconnect or fail the request.
+        logger.debug("Socket already closed while sending", exc_info=True)
 
 
 async def send_to_support_agent(

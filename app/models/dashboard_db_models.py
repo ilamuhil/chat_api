@@ -91,7 +91,7 @@ class Bots(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True),
         nullable=False,
-        server_default=text("now()"),
+        default=lambda: datetime.datetime.now(datetime.UTC),
         onupdate=text("now()"),
     )
     organization_id: Mapped[str | None] = mapped_column(
@@ -149,7 +149,7 @@ class Users(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True),
         nullable=False,
-        server_default=text("now()"),
+        default=lambda: datetime.datetime.now(datetime.UTC),
         onupdate=text("now()"),
     )
 
@@ -509,7 +509,7 @@ class LeadFollowUps(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True),
         nullable=False,
-        server_default=text("now()"),
+        default=lambda: datetime.datetime.now(datetime.UTC),
         onupdate=text("now()"),
     )
     lead_id: Mapped[uuid.UUID] = mapped_column(
@@ -558,7 +558,7 @@ class Leads(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True),
         nullable=False,
-        server_default=text("now()"),
+        default=lambda: datetime.datetime.now(datetime.UTC),
         onupdate=text("now()"),
     )
     captured_at: Mapped[datetime.datetime] = mapped_column(

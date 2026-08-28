@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from langgraph.graph.state import CompiledStateGraph
+from starlette.websockets import WebSocketState
 
 from app.services.chat import (
     log_message,
@@ -53,14 +54,17 @@ async def chat(websocket: WebSocket):
     conversation_uuid = uuid.UUID(str(session.conversation_id))
     logger.info("Conversation UUID", extra={"conversation_uuid": conversation_uuid})
 
-    try:
-        visitor_uuid = uuid.UUID(str(session.visitor_id))
-    except Exception:
-        logger.exception(
-            "Error parsing visitor UUID", extra={"visitor_id": session.visitor_id}
-        )
-        return
-    form_required = websocket == session.user_socket and not has_lead(visitor_uuid)
+    visitor_uuid: uuid.UUID | None = None
+    form_required = False
+    if websocket == session.user_socket:
+        try:
+            visitor_uuid = uuid.UUID(str(session.visitor_id))
+        except (ValueError, AttributeError, TypeError):
+            logger.exception(
+                "Error parsing visitor UUID", extra={"visitor_id": session.visitor_id}
+            )
+            return
+        form_required = not has_lead(visitor_uuid)
     ai_queue: asyncio.Queue[dict[str, Any]] | None = None
     ai_worker_task: asyncio.Task[None] | None = None
 
@@ -131,6 +135,8 @@ async def chat(websocket: WebSocket):
 
             logger.debug("WebSocket message received", extra={"type": msg_type})
             if msg_type == "form_capture":
+                if websocket != session.user_socket or visitor_uuid is None:
+                    continue
                 form_required = await handle_form_capture(
                     message_data,
                     form_required=form_required,
@@ -234,4 +240,5 @@ async def chat(websocket: WebSocket):
                 await ai_worker_task
             except asyncio.CancelledError:
                 pass
-        await websocket.close()
+        if websocket.application_state != WebSocketState.DISCONNECTED:
+            await websocket.close()

@@ -140,7 +140,7 @@ def inject_prompt_context(
 
 
 @wrap_model_call
-def select_bot_model(
+async def select_bot_model(
     request: ModelRequest[InstituteContext],
     handler: Any,
 ) -> Any:
@@ -163,7 +163,7 @@ def select_bot_model(
         reasoning={"effort": "low"},
         output_version="responses/v1",
     )
-    return handler(request.override(model=bot_model))
+    return await handler(request.override(model=bot_model))
 
 
 @tool(

@@ -24,9 +24,9 @@ async def authenticate_socket(
     conversation_id = data.get("conversation_id")
     visitor_id = data.get("visitor_id")
 
-    if token is None or conversation_id is None or visitor_id is None:
+    if token is None or conversation_id is None:
         await websocket.close(
-            code=1008, reason="No token/conversation id/visitor id provided"
+            code=1008, reason="No token or conversation id provided"
         )
         return None
 
@@ -60,6 +60,15 @@ async def authenticate_socket(
         await websocket.close(code=1008, reason="Conversation mismatch")
         return None
 
+    connection_type = claims.get("type")
+    if connection_type == "user" and visitor_id is None:
+        logger.error(
+            "Visitor ID not found for user connection",
+            extra={"conversation_id": conversation_id},
+        )
+        await websocket.close(code=1008, reason="Visitor ID not provided")
+        return None
+
     organization_id = claims.get("organization_id")
     if organization_id is None:
         logger.error(
@@ -82,7 +91,7 @@ async def authenticate_socket(
         await websocket.close(code=1008, reason=f"Invalid bot ID: {e!s}")
         return None
 
-    if claims.get("type") == "user":
+    if connection_type == "user":
         session = ChatSession(
             conversation_id=conversation_id,
             organization_id=organization_id,
@@ -92,7 +101,7 @@ async def authenticate_socket(
         active_sessions[conversation_id] = session
         return session, bot_id
 
-    if claims.get("type") == "support_agent":
+    if connection_type == "support_agent":
         session = active_sessions.get(conversation_id)
         if session is None:
             logger.error(
