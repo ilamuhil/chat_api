@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import uuid
 from datetime import UTC, datetime
-from typing import Any
-
+from typing import Any, Tuple, cast, Literal
 from fastapi import WebSocket
 from sqlalchemy import select, update
 
@@ -16,6 +16,7 @@ from app.models.chat_db_models import (
     EmbeddingConfigurations,
     Messages,
 )
+from sqlalchemy.engine import CursorResult
 from app.models.dashboard_db_models import Bots, ConversationsMeta, Leads
 from app.services.chat import (
     end_user_typing,
@@ -92,6 +93,23 @@ async def send_first_message_once(
         )
         set_data(greeting_key, True, ttl=None)
 
+def _sync_associate_lead_with_conversation(conversation_uuid: uuid.UUID, lead_id: uuid.UUID) -> bool:
+    try:
+        with create_dashboard_db_session() as dashboard_db:
+            result = cast(CursorResult[Any], dashboard_db.execute(
+                update(ConversationsMeta)
+                .where(ConversationsMeta.id == conversation_uuid)
+                .values(lead_id=lead_id),
+            ))
+            dashboard_db.commit()
+            return result.rowcount == 1
+    except Exception:
+        logger.exception("Error associating lead with conversation", extra={"conversation_uuid": conversation_uuid, "lead_id": lead_id})
+        return False
+   
+        
+async def associate_lead_with_conversation(conversation_uuid: uuid.UUID, lead_id: uuid.UUID) -> bool:
+    return await asyncio.to_thread(_sync_associate_lead_with_conversation, conversation_uuid, lead_id)
 
 async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | None:
     bot_pref_raw = get_data(f"bot:{bot_id}:config")
@@ -180,12 +198,16 @@ async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | 
     return bot_pref
 
 
-def has_lead(visitor_uuid: uuid.UUID) -> bool:
+def has_lead(visitor_uuid: uuid.UUID, bot_id: uuid.UUID, organization_id: str) -> Tuple[Literal[True], uuid.UUID] | Tuple[Literal[False], None]:
     with create_dashboard_db_session() as dashboard_db:
         existing_lead = dashboard_db.scalar(
-            select(Leads.id).where(Leads.visitor_id == visitor_uuid).limit(1)
+            select(Leads.id).where(Leads.visitor_id == visitor_uuid, Leads.bot_id == bot_id, Leads.organization_id == organization_id, Leads.deleted_at.is_(None)).limit(1).order_by(Leads.captured_at.desc())
         )
-    return existing_lead is not None
+    if  existing_lead is not None:
+        return True, uuid.UUID(str(existing_lead))
+    else:
+        logger.info("No lead found", extra={"visitor_uuid": visitor_uuid, "bot_id": bot_id, "organization_id": organization_id})
+        return False, None
 
 
 async def handle_form_capture(
@@ -236,6 +258,11 @@ async def handle_form_capture(
         )
         with create_dashboard_db_session() as dashboard_db:
             dashboard_db.add(lead)
+            dashboard_db.execute(
+                update(ConversationsMeta)
+                .where(ConversationsMeta.id == conversation_uuid)
+                .values(lead_id=lead_id),
+            )
             dashboard_db.commit()
         logger.info(
             "Form capture data stored in database",

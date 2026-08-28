@@ -24,6 +24,7 @@ from app.ws.handlers import (
     has_lead,
     load_bot_prefs,
     send_first_message_once,
+    associate_lead_with_conversation,
 )
 from app.ws.registry import ACTIVE_SESSIONS
 
@@ -60,7 +61,8 @@ async def chat(websocket: WebSocket):
             "Error parsing visitor UUID", extra={"visitor_id": session.visitor_id}
         )
         return
-    form_required = websocket == session.user_socket and not has_lead(visitor_uuid)
+    lead_exists, lead_id = has_lead(visitor_uuid, bot_id, session.organization_id)    
+    form_required = websocket == session.user_socket and not lead_exists
     ai_queue: asyncio.Queue[dict[str, Any]] | None = None
     ai_worker_task: asyncio.Task[None] | None = None
 
@@ -94,6 +96,9 @@ async def chat(websocket: WebSocket):
         # Returning users already submitted the form. Skip it and only send the
         # greeting if this conversation has never received one.
         if websocket == session.user_socket and not form_required:
+            # Returning visitor already has a lead; attach it to this conversation.
+            if lead_exists and lead_id is not None:
+                await associate_lead_with_conversation(conversation_uuid, lead_id)
             await send_first_message_once(
                 greeting_key,
                 conversation_uuid,
