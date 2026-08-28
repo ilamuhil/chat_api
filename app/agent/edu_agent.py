@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import ModelRequest, dynamic_prompt
+from langchain.agents.middleware import ModelRequest, dynamic_prompt, wrap_model_call
 from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
@@ -38,7 +38,6 @@ host = os.getenv("CHAT_DB_HOST")
 port = os.getenv("CHAT_DB_PORT", "5432")
 name = os.getenv("CHAT_DB_NAME")
 openai_api_key = os.getenv("OPENAI_API_KEY")
-MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 HANDOVER_TIMEOUT_SECONDS = int(os.getenv("HANDOVER_TIMEOUT_SECONDS", "180"))
 logger = logging.getLogger(__name__)
 
@@ -138,6 +137,33 @@ def inject_prompt_context(
         capture_leads_text=capture_leads_text,
         rag_context_text=rag_context_text,
     )
+
+
+@wrap_model_call
+def select_bot_model(
+    request: ModelRequest[InstituteContext],
+    handler: Any,
+) -> Any:
+    """Select the LLM from the active bot configuration."""
+    context = request.runtime.context
+    if not isinstance(context, InstituteContext):
+        raise TypeError("Bot context is required for model selection")
+
+    model_name = context.bot_prefs.get("llm_model")
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise RuntimeError("Active bot LLM configuration is missing")
+
+    bot_model = ChatOpenAI(
+        model=model_name,
+        max_completion_tokens=500,
+        api_key=SecretStr(require_value(openai_api_key, "OPENAI_API_KEY")),
+        timeout=30,
+        max_retries=1,
+        use_responses_api=True,
+        reasoning={"effort": "low"},
+        output_version="responses/v1",
+    )
+    return handler(request.override(model=bot_model))
 
 
 @tool(
@@ -345,10 +371,7 @@ async def initialize_agent():
         name,
         "CHAT_DB_NAME",
     )
-    api_key = require_value(
-        openai_api_key,
-        "OPENAI_API_KEY",
-    )
+    require_value(openai_api_key, "OPENAI_API_KEY")
 
     db_uri = (
         f"postgresql://{db_user}:{quote_plus(db_password)}"
@@ -377,22 +400,13 @@ async def initialize_agent():
         checkpointer = AsyncPostgresSaver(pool)
         await checkpointer.setup()
 
-        openai_model = ChatOpenAI(
-            model=MODEL,
-            max_completion_tokens=200,
-            api_key=SecretStr(api_key),
-            timeout=30,
-            max_retries=1,
-            use_responses_api=True,
-            reasoning={"effort": "low"},
-            output_version="responses/v1",
-        )
-
         agent = create_agent(
-            model=openai_model,
+            # The middleware replaces this bootstrap model using the active
+            # bot's BotConfigurations record before every model call.
+            model="gpt-5.6-luna",
             tools=[agent_handover_request],
             checkpointer=checkpointer,
-            middleware=[inject_prompt_context],
+            middleware=[inject_prompt_context, select_bot_model],
             context_schema=InstituteContext,
         )
 

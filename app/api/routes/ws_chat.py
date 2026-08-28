@@ -19,9 +19,9 @@ from app.services.chat import (
 from app.ws.agent_tool_api import get_conversation
 from app.ws.auth import authenticate_socket
 from app.ws.handlers import (
-    conversation_has_lead,
     end_chat_session,
     handle_form_capture,
+    has_lead,
     load_bot_prefs,
     send_first_message_once,
 )
@@ -53,9 +53,14 @@ async def chat(websocket: WebSocket):
     conversation_uuid = uuid.UUID(str(session.conversation_id))
     logger.info("Conversation UUID", extra={"conversation_uuid": conversation_uuid})
 
-    form_required = websocket == session.user_socket and not conversation_has_lead(
-        conversation_uuid
-    )
+    try:
+        visitor_uuid = uuid.UUID(str(session.visitor_id))
+    except Exception:
+        logger.exception(
+            "Error parsing visitor UUID", extra={"visitor_id": session.visitor_id}
+        )
+        return
+    form_required = websocket == session.user_socket and not has_lead(visitor_uuid)
     ai_queue: asyncio.Queue[dict[str, Any]] | None = None
     ai_worker_task: asyncio.Task[None] | None = None
 
@@ -134,6 +139,7 @@ async def chat(websocket: WebSocket):
                     conversation_uuid=conversation_uuid,
                     greeting_key=greeting_key,
                     first_message=first_message,
+                    visitor_uuid=visitor_uuid,
                 )
                 continue
 

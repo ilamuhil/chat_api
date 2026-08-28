@@ -22,9 +22,12 @@ async def authenticate_socket(
 
     token = data.get("token")
     conversation_id = data.get("conversation_id")
+    visitor_id = data.get("visitor_id")
 
-    if token is None or conversation_id is None:
-        await websocket.close(code=1008, reason="No token/conversation id provided")
+    if token is None or conversation_id is None or visitor_id is None:
+        await websocket.close(
+            code=1008, reason="No token/conversation id/visitor id provided"
+        )
         return None
 
     claims = verify_token(
@@ -84,6 +87,7 @@ async def authenticate_socket(
             conversation_id=conversation_id,
             organization_id=organization_id,
             user_socket=websocket,
+            visitor_id=visitor_id,
         )
         active_sessions[conversation_id] = session
         return session, bot_id

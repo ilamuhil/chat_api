@@ -89,10 +89,13 @@ class Bots(Base):
         Boolean, nullable=False, server_default=text("false")
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(True), nullable=False, server_default=text("now()")
+        DateTime(True),
+        nullable=False,
+        server_default=text("now()"),
+        onupdate=text("now()"),
     )
     organization_id: Mapped[str | None] = mapped_column(
-        ForeignKey("public.organizations.id", ondelete="CASCADE")
+        ForeignKey("public.organizations.id", ondelete="CASCADE"),
     )
     tone: Mapped[str | None] = mapped_column(Text)
     role: Mapped[str | None] = mapped_column(Text)
@@ -144,7 +147,10 @@ class Users(Base):
         DateTime(True), nullable=False, server_default=text("now()")
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(True), nullable=False, server_default=text("now()")
+        DateTime(True),
+        nullable=False,
+        server_default=text("now()"),
+        onupdate=text("now()"),
     )
 
     email: Mapped[str | None] = mapped_column(String, unique=True)
@@ -205,7 +211,8 @@ class OrganizationMembers(Base):
         DateTime(True), nullable=False, server_default=text("now()")
     )
     organization_id: Mapped[str | None] = mapped_column(
-        ForeignKey("public.organizations.id", ondelete="CASCADE")
+        ForeignKey("public.organizations.id", ondelete="CASCADE"),
+        server_default=text("''"),
     )
     role: Mapped[str | None] = mapped_column(Text)
     user_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -444,6 +451,9 @@ class ConversationsMeta(Base):
     bot_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("public.bots.id", ondelete="SET NULL")
     )
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("public.leads.id", ondelete="SET NULL")
+    )
     api_key_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("public.api_keys.id", ondelete="SET NULL")
     )
@@ -467,15 +477,18 @@ class ConversationsMeta(Base):
         "ApiKeys", back_populates="conversations_meta"
     )
     bot: Mapped[Bots | None] = relationship("Bots", back_populates="conversations_meta")
+    lead: Mapped[Leads | None] = relationship("Leads", back_populates="conversations")
     organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="conversations_meta"
     )
-    leads: Mapped[list[Leads]] = relationship("Leads", back_populates="conversation")
 
 
 class LeadFollowUps(Base):
     __tablename__ = "lead_follow_ups"
-    __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
+    __table_args__ = (
+        Index("lead_follow_ups_lead_id_idx", "lead_id"),
+        {"schema": "public"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=text("gen_random_uuid()")
@@ -515,7 +528,7 @@ class Leads(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=text("gen_random_uuid()")
     )
-    name: Mapped[str | None] = mapped_column(Text) # ! enquirer name
+    name: Mapped[str | None] = mapped_column(Text)  # ! enquirer name
     email: Mapped[str | None] = mapped_column(Text)
     phone: Mapped[str | None] = mapped_column(Text)
     enquirer_type: Mapped[str | None] = mapped_column(Text)
@@ -560,13 +573,9 @@ class Leads(Base):
     bot_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("public.bots.id", ondelete="SET NULL")
     )
-    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("public.conversations_meta.id", ondelete="SET NULL")
-    )
-
     bot: Mapped[Bots | None] = relationship("Bots", back_populates="leads")
-    conversation: Mapped[ConversationsMeta | None] = relationship(
-        "ConversationsMeta", back_populates="leads"
+    conversations: Mapped[list[ConversationsMeta]] = relationship(
+        "ConversationsMeta", back_populates="lead"
     )
     organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="leads"

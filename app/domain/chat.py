@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ChatSession(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     conversation_id: str = Field(min_length=1)
+    visitor_id: str | None = Field(default=None)
     organization_id: str = Field(min_length=1)
     # WebSocket objects are runtime-only (not JSON-serializable); exclude from dumps.
     user_socket: WebSocket | None = Field(default=None, exclude=True)

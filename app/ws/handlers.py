@@ -36,6 +36,7 @@ REQUIRED_BOT_PREF_KEYS = {
     "embedding_configuration_id",
     "embedding_model",
     "embedding_dimension",
+    "llm_model",
     "retrieval_k",
     "similarity_threshold",
 }
@@ -179,10 +180,10 @@ async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | 
     return bot_pref
 
 
-def conversation_has_lead(conversation_uuid: uuid.UUID) -> bool:
+def has_lead(visitor_uuid: uuid.UUID) -> bool:
     with create_dashboard_db_session() as dashboard_db:
         existing_lead = dashboard_db.scalar(
-            select(Leads.id).where(Leads.conversation_id == conversation_uuid).limit(1)
+            select(Leads.id).where(Leads.visitor_id == visitor_uuid).limit(1)
         )
     return existing_lead is not None
 
@@ -196,6 +197,7 @@ async def handle_form_capture(
     conversation_uuid: uuid.UUID,
     greeting_key: str,
     first_message: str,
+    visitor_uuid: uuid.UUID,
 ) -> bool:
     """Process a form_capture message. Returns the updated form_required flag."""
     if not form_required:
@@ -224,12 +226,12 @@ async def handle_form_capture(
 
         lead = Leads(
             id=lead_id,
+            visitor_id=visitor_uuid,
             name=name,
             email=email,
             phone=phone,
             bot_id=bot_id,
             organization_id=session.organization_id,
-            conversation_id=conversation_uuid,
             captured_at=datetime.now(UTC),
         )
         with create_dashboard_db_session() as dashboard_db:
@@ -271,7 +273,7 @@ async def handle_form_capture(
         await send_to_end_user(
             {
                 "type": "error",
-                "message": "Error storing form capture data to database",
+                "message": "User information could not be captured. Please contact support.",
                 "role": "system",
                 "conversation_id": session.conversation_id,
             },
