@@ -1,8 +1,13 @@
 import re
 import unicodedata
+
 from bs4 import BeautifulSoup
-from app.infra.r2_storage import (r2_delete_object, r2_object_exists,
-                                  r2_presigned_get_url)
+
+from app.infra.r2_storage import (
+    r2_delete_object,
+    r2_object_exists,
+    r2_presigned_get_url,
+)
 
 
 def extract_main_text_from_html(html: str) -> str:
@@ -54,7 +59,7 @@ def clean_scraped_text(text: str) -> str:
     # collapse whitespace
     # tabs/multiple spaces -> single space
     text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n[ \t]+", "\n", text)   # trim line-leading spaces
+    text = re.sub(r"\n[ \t]+", "\n", text)  # trim line-leading spaces
     # many blank lines -> max 1 blank line
     text = re.sub(r"\n{3,}", "\n\n", text)
 
@@ -92,5 +97,3 @@ def get_signed_file_url(bucket: str, path: str, expires_in: int = 3600) -> str:
     Create a signed URL for a private R2 object (no DB calls).
     """
     return r2_presigned_get_url(bucket, path, expires_in=expires_in)
-
-

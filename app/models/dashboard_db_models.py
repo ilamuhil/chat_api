@@ -423,9 +423,18 @@ class TrainingSources(Base):
     original_filename: Mapped[str | None] = mapped_column(Text)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     mime_type: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=text("now()"),
+    )
+    last_trained_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
     deleted_by: Mapped[str | None] = mapped_column(Text, nullable=True)
-
+    quality_status: Mapped[str | None] = mapped_column(Text)
+    # ! good | warning | poor
+    quality_summary: Mapped[str | None] = mapped_column(Text)
     bot: Mapped[Bots | None] = relationship("Bots", back_populates="training_sources")
     organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="training_sources"
