@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 
@@ -47,7 +47,7 @@ def delete_training_source_job(
             return
 
         job.status = "processing"
-        job.started_at = datetime.now(timezone.utc)
+        job.started_at = datetime.now(UTC)
         chat_session.commit()
 
         source = dashboard_session.scalars(
@@ -55,14 +55,14 @@ def delete_training_source_job(
         ).one_or_none()
         if source is None:
             job.status = "cleanup_completed"
-            job.completed_at = datetime.now(timezone.utc)
+            job.completed_at = datetime.now(UTC)
             chat_session.commit()
             return
 
         if source.deleted_at is None:
             raise ValueError("Source not marked as deleted")
 
-        deleted_at = datetime.now(timezone.utc)
+        deleted_at = datetime.now(UTC)
         chat_session.execute(
             update(Embeddings)
             .where(
@@ -98,14 +98,14 @@ def delete_training_source_job(
                 )
 
         job.status = "cleanup_completed"
-        job.completed_at = datetime.now(timezone.utc)
+        job.completed_at = datetime.now(UTC)
         chat_session.commit()
         logger.info("Cleanup completed", extra={"job_id": job_id})
     except ValueError:
         if job is not None:
             try:
                 job.status = "failed"
-                job.completed_at = datetime.now(timezone.utc)
+                job.completed_at = datetime.now(UTC)
                 chat_session.commit()
             except Exception:
                 chat_session.rollback()
@@ -118,7 +118,7 @@ def delete_training_source_job(
         if job is not None:
             try:
                 job.status = "cleanup_completed"
-                job.completed_at = datetime.now(timezone.utc)
+                job.completed_at = datetime.now(UTC)
                 chat_session.commit()
             except Exception:
                 chat_session.rollback()

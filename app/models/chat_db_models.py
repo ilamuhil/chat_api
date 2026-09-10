@@ -71,13 +71,11 @@ class Documents(Base):
     embeddings: Mapped[Embeddings] = relationship(
         "Embeddings", back_populates="document", uselist=False
     )
-    metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    #* Metadata structure 
-    #* table : {source:{page:int},structure:{content_type:"table",heading_path:[str],domain:{}}
-    #* csv : {source:{row:int},structure:{content_type:"row",heading_path:[str],domain:{}}
-    #* html : {source:{url:str},structure:{content_type:"html",heading_path:[str],domain:{}}
-    
-    
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # * Metadata structure
+    # * table : {source:{page:int},structure:{content_type:"table",heading_path:[str],domain:{}}
+    # * csv : {source:{row:int},structure:{content_type:"row",heading_path:[str],domain:{}}
+    # * html : {source:{url:str},structure:{content_type:"html",heading_path:[str],domain:{}}
 
 
 class Messages(Base):
@@ -143,7 +141,6 @@ class TrainingJobs(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     organization_id: Mapped[str] = mapped_column(Text, nullable=False)
     bot_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-    pipeline_version: Mapped[int] = mapped_column(Integer, nullable=False)
     # queued, processing, completed, failed, cleanup_completed
     status: Mapped[str] = mapped_column(Text, nullable=False)
     started_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))

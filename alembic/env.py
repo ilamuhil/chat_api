@@ -30,6 +30,7 @@ def _require_env(key: str) -> str:
         raise RuntimeError(f"Environment variable {key} is not set")
     return str(v).strip()
 
+
 def _require_any_env(keys: list[str]) -> str:
     """
     Return the first non-empty env var from `keys`.
@@ -39,10 +40,14 @@ def _require_any_env(keys: list[str]) -> str:
         v = os.getenv(k)
         if v is not None and str(v).strip():
             return str(v).strip()
-    raise RuntimeError(f"None of these environment variables are set: {', '.join(keys)}")
+    raise RuntimeError(
+        f"None of these environment variables are set: {', '.join(keys)}"
+    )
 
 
-def _build_postgres_url(host: str, port: str, user: str, password: str, name: str) -> str:
+def _build_postgres_url(
+    host: str, port: str, user: str, password: str, name: str
+) -> str:
     # SQLAlchemy psycopg3 URL; require TLS.
     return (
         f"postgresql+psycopg://{user}:{quote_plus(password)}@{host}:{port}/{name}"
@@ -51,12 +56,12 @@ def _build_postgres_url(host: str, port: str, user: str, password: str, name: st
 
 
 # Load .env/.env.local for local development
-from app.core.env import load_app_env  # noqa: E402
+from app.core.env import load_app_env
 
 load_app_env()
 
 # Target metadata: ONLY the chat DB models
-from app.models.chat_db_models import Base  # noqa: E402
+from app.models.chat_db_models import Base
 
 target_metadata = Base.metadata
 
@@ -66,10 +71,10 @@ CHECKPOINTER_TABLES = {
     "checkpoint_writes",
     "checkpoint_blobs",
 }
+
+
 def include_object(object_, name, type_, reflected, compare_to):
-    if type_ == "table" and reflected and name in CHECKPOINTER_TABLES:
-        return False
-    return True
+    return not (type_ == "table" and reflected and name in CHECKPOINTER_TABLES)
 
 
 def get_url() -> str:

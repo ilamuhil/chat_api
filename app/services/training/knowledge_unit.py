@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-@dataclass()
+@dataclass(slots=True)
 class KnowledgeUnit:
     content: str = field(default="")
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -17,7 +17,7 @@ class KnowledgeUnit:
         return self.metadata.get("structure", {}).get("content_type", None)
 
     @property
-    def heading_path(self) -> list[str] | None:
+    def heading_path(self) -> list[str]:
         return self.metadata.get("structure", {}).get("heading_path", [])
 
     @property
@@ -25,12 +25,12 @@ class KnowledgeUnit:
         path = self.heading_path
         return path[-1] if path else None
 
-
-@dataclass()
-class Extractor:
-    html: str = field(default="")
-    heading_state: dict[str, Any] = field(default_factory=dict)
-    source_order: int = field(default=0)
-
-    def current_heading_path(self) -> list[str] | None:
-        return
+    def pretty_print(self) -> None:
+        print(f"Content: {self.content}")
+        print(f"Metadata: {self.metadata}")
+        print(f"Source Order: {self.source_order}")
+        print(f"Page: {self.page}")
+        print(f"Content Type: {self.content_type}")
+        print(f"Heading Path: {self.heading_path}")
+        print(f"Section Title: {self.section_title}")
+        print("-" * 100)
