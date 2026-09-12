@@ -11,7 +11,7 @@ from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 
 from app.db.session import create_chat_db_session, create_dashboard_db_session
-from app.domain.chat import ChatSession
+from app.domain import ChatSession
 from app.infra.redis_store import get_data, set_data
 from app.models.chat_db_models import (
     BotConfigurations,
@@ -94,6 +94,7 @@ async def send_first_message_once(
         )
         set_data(greeting_key, True, ttl=None)
 
+
 def _sync_associate_lead_with_conversation(
     conversation_uuid: uuid.UUID,
     lead_id: uuid.UUID,
@@ -127,6 +128,7 @@ async def associate_lead_with_conversation(
         conversation_uuid,
         lead_id,
     )
+
 
 async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | None:
     bot_pref_raw = get_data(f"bot:{bot_id}:config")

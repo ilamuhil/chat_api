@@ -13,10 +13,9 @@ from langchain.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy import update
 
-from app.agent.edu_agent import InstituteContext
 from app.core.env import load_app_env
 from app.db.session import create_chat_db_session, create_dashboard_db_session
-from app.domain.chat import ChatSession
+from app.domain import ChatSession, InstituteContext
 from app.helpers.rag import embed_query, retrieve_closest_embeddings
 from app.infra.redis_store import set_data
 from app.models.chat_db_models import Documents, Embeddings, Messages, RetrievalLogs

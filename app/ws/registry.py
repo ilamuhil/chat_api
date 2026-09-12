@@ -1,3 +1,3 @@
-from app.domain.chat import ChatSession
+from app.domain import ChatSession
 
 ACTIVE_SESSIONS: dict[str, ChatSession] = {}

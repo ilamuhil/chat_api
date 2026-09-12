@@ -6,7 +6,7 @@ import uuid
 from fastapi import WebSocket
 
 from app.core.jwt import verify_token
-from app.domain.chat import ChatSession
+from app.domain import ChatSession
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +25,7 @@ async def authenticate_socket(
     visitor_id = data.get("visitor_id")
 
     if token is None or conversation_id is None:
-        await websocket.close(
-            code=1008, reason="No token or conversation id provided"
-        )
+        await websocket.close(code=1008, reason="No token or conversation id provided")
         return None
 
     claims = verify_token(
