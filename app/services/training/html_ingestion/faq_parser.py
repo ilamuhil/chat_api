@@ -73,6 +73,8 @@ class FAQParser:
             score += 2
         if tag.has_attr("aria-controls"):
             score += 2
+        if tag.get_text(" ", strip=True).endswith("?"):
+            score += 1
         return score
 
     def _answer_score(self, tag: Tag) -> int:
