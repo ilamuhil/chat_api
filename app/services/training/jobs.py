@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -65,9 +65,7 @@ def _get_job_config(
         )
     ).one_or_none()
     if bot_config is None:
-        raise ValueError(
-            "Training job references an unavailable bot configuration"
-        )
+        raise ValueError("Training job references an unavailable bot configuration")
     return config
 
 
@@ -141,7 +139,7 @@ def process_training_job(
             chat_session.commit()
 
         job.status = "processing"
-        job.started_at = datetime.now(timezone.utc)
+        job.started_at = datetime.now(UTC)
         chat_session.commit()
 
         source_uuids = [uuid.UUID(source_id) for source_id in source_ids]
@@ -209,7 +207,7 @@ def process_training_job(
             if any_successful
             else "failed"
         )
-        job.completed_at = datetime.now(timezone.utc)
+        job.completed_at = datetime.now(UTC)
         chat_session.commit()
         logger.info(
             "Training job finished",
@@ -229,18 +227,21 @@ def process_training_job(
             ):
                 chat_session.execute(
                     update(model)
-                    .where(model.id.in_(
-                        [job.embedding_configuration_id, job.bot_configuration_id]
-                    ))
+                    .where(
+                        model.id.in_(
+                            [job.embedding_configuration_id, job.bot_configuration_id]
+                        )
+                    )
                     .values(state="failed")
                 )
         if job is not None:
             try:
                 job.status = "failed"
-                job.completed_at = datetime.now(timezone.utc)
+                job.completed_at = datetime.now(UTC)
                 chat_session.commit()
-            except Exception:
+            except Exception as e:
                 chat_session.rollback()
+                logger.exception("Failed to update training job status", extra={"error": str(e)})
     finally:
         dashboard_session.close()
         chat_session.close()

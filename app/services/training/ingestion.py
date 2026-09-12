@@ -21,6 +21,28 @@ from app.models.dashboard_db_models import Files, TrainingSources
 
 logger = logging.getLogger(__name__)
 
+
+class IngestionPipeline:
+    def __init__(
+        self,
+        source: TrainingSources,
+        chat_session: Session,
+        dashboard_session: Session,
+        config: EmbeddingConfigurations,
+    ):
+        self.source = source
+        self.chat_session = chat_session
+        self.dashboard_session = dashboard_session
+        self.config = config
+        self._MIME_TO_EXT: dict[str, str] = {
+            "application/pdf": ".pdf",
+            "text/csv": ".csv",
+            "text/plain": ".txt",
+            "text/markdown": ".md",
+            "text/x-markdown": ".md",
+        }
+
+
 _MIME_TO_EXT: dict[str, str] = {
     "application/pdf": ".pdf",
     "text/csv": ".csv",
@@ -30,9 +52,7 @@ _MIME_TO_EXT: dict[str, str] = {
 }
 
 
-def _extension_for_loader(
-    original_filename: str | None, mime_type: str | None
-) -> str:
+def _extension_for_loader(original_filename: str | None, mime_type: str | None) -> str:
     """Resolve an extension from the original filename or MIME type."""
     if original_filename:
         extension = Path(original_filename).suffix.lower()
@@ -165,11 +185,17 @@ def _load_url_text(url: str) -> str:
         if len(cleaned) >= 200:
             return cleaned
         raise ValueError("Page content too short after extraction/cleaning")
-    except Exception as error:
+    except httpx.HTTPError as error:
         logger.warning(
             "Primary URL extraction failed; falling back to WebBaseLoader",
             extra={"url": url, "error": str(error)},
         )
+    except ValueError as ve:
+        logger.error("Error loading URL text", extra={"url": url, "error": str(ve)})
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error occurred", extra={"error": str(e)})
+        raise
 
     documents = WebBaseLoader(url).load()
     cleaned = clean_scraped_text(
@@ -191,13 +217,16 @@ def process_url_training_source(
 ) -> None:
     """Load, chunk, persist, and embed a URL training source."""
     if not isinstance(source.source_value, str):
-        raise ValueError("URL must be a string")
-    _persist_chunks(source, chat_session, _chunk_text(_load_url_text(source.source_value), config), config)
+        raise TypeError("URL must be a string")
+    _persist_chunks(
+        source,
+        chat_session,
+        _chunk_text(_load_url_text(source.source_value), config),
+        config,
+    )
 
 
-def _load_file_text(
-    source: TrainingSources, dashboard_session: Session
-) -> str:
+def _load_file_text(source: TrainingSources, dashboard_session: Session) -> str:
     if not source.source_value:
         raise ValueError("Missing file information for this training source.")
 
@@ -227,14 +256,16 @@ def _load_file_text(
                 "path": file_record.path,
             },
         )
-        raise ValueError("Unable to verify the file in storage right now. Please retry.")
+        raise ValueError(
+            "Unable to verify the file in storage right now. Please retry."
+        )
 
     if not exists:
-        raise ValueError("File upload was not completed. Please re-upload and try again.")
+        raise ValueError(
+            "File upload was not completed. Please re-upload and try again."
+        )
 
-    suffix = _extension_for_loader(
-        file_record.original_filename, file_record.mime_type
-    )
+    suffix = _extension_for_loader(file_record.original_filename, file_record.mime_type)
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory) / f"source{suffix}"
         try:

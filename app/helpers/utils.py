@@ -1,10 +1,29 @@
 import re
 import unicodedata
+
 from bs4 import BeautifulSoup
-from app.infra.r2_storage import (r2_delete_object, r2_object_exists,
-                                  r2_presigned_get_url)
+
+from app.infra.r2_storage import (
+    r2_delete_object,
+    r2_object_exists,
+    r2_presigned_get_url,
+)
 
 
+def normalize_text(text: str) -> str:
+    """replace multiple spaces with a single space and strip the text"""
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def normalize_identifier(value: str) -> str:
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    value = re.sub(r"[^a-zA-Z0-9_]+", "_", value)
+    value = value.strip("_").lower()
+    return value
+
+
+# ! this is soon to be deprecated in favor of the html_cleaner service
 def extract_main_text_from_html(html: str) -> str:
     """
     - Remove boilerplate elements (nav/footer/header/aside/form/scripts).
@@ -42,6 +61,7 @@ def extract_main_text_from_html(html: str) -> str:
     return text.strip()
 
 
+# ! this is soon to be deprecated in favor of the html_cleaner service
 def clean_scraped_text(text: str) -> str:
     text = text.replace("\x00", "")
     # normalize unicode + newlines
@@ -54,7 +74,7 @@ def clean_scraped_text(text: str) -> str:
     # collapse whitespace
     # tabs/multiple spaces -> single space
     text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n[ \t]+", "\n", text)   # trim line-leading spaces
+    text = re.sub(r"\n[ \t]+", "\n", text)  # trim line-leading spaces
     # many blank lines -> max 1 blank line
     text = re.sub(r"\n{3,}", "\n\n", text)
 
@@ -92,5 +112,3 @@ def get_signed_file_url(bucket: str, path: str, expires_in: int = 3600) -> str:
     Create a signed URL for a private R2 object (no DB calls).
     """
     return r2_presigned_get_url(bucket, path, expires_in=expires_in)
-
-

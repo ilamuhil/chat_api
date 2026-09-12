@@ -28,6 +28,9 @@ dependencies = [
     "langgraph-checkpoint-postgres>3,<4",
     "langchain>=1.3.14",
     "deepagents>=0.6.12",
+    "markdownify>=1.2.3",
+    "markdown-it-py>=4.2.0",
+    "docling[rapidocr]>=2.126.0",
 ]
 
 [dependency-groups]
