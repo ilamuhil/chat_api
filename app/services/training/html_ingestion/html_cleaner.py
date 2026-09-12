@@ -1,11 +1,15 @@
 import hashlib
 import logging
 import re
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from typing import ClassVar, cast
 
 from bs4 import BeautifulSoup, Tag
 from bs4.element import Comment
+
+from app.helpers.utils import normalize_identifier, normalize_text
+from app.services.training.html_ingestion.faq_parser import FAQParser
 
 logger = logging.getLogger(__name__)
 
@@ -13,12 +17,15 @@ logger = logging.getLogger(__name__)
 @dataclass
 class HTMLCleaner:
     reject_unknown_hidden: bool = True
+    faq_parser: FAQParser = field(default_factory=FAQParser)
 
-    # Exact selectors, rather than substring keywords.
-    # Extend this tuple for websites whose markup you have inspected.
     boilerplate_selectors: tuple[str, ...] = (
         "nav",
         "[role~='navigation']",
+        "body > header",
+        ".site-header",
+        ".topbar",
+        ".utility-bar",
         "#onetrust-banner-sdk",
         "#onetrust-consent-sdk",
         "#CybotCookiebotDialog",
@@ -27,8 +34,20 @@ class HTMLCleaner:
         "#cookie-consent",
         ".cookie-consent",
         ".newsletter-popup",
+        "[role='dialog'][aria-hidden='true']",
+        "#guidanceVideoModal",
+        ".guidance-player-modal",
+        "#consultModal",
+        ".consult-modal",
+        ".ai-finder",
+        ".ai-finder-panel",
+        "[class*='chat-widget']",
+        "[class*='chatbot']",
         ".advertisement",
         "ins.adsbygoogle",
+        "a[class*='floating']",
+        "a[class*='whatsapp']",
+        "a[class*='whats-new']",
         ".photo-credit",
         ".image-credit",
         "[class*='photo-credit']",
@@ -51,6 +70,31 @@ class HTMLCleaner:
         r"\s*(?:!\s*important\s*)?(?:;|$)",
         re.IGNORECASE,
     )
+    _CTA_LABEL_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^(?:"
+        r"(?:log|sign)\s*in|sign\s*up|register|subscribe|"
+        r"apply(?:\s+now)?|enrol(?:l)?(?:\s+now)?|"
+        r"book(?:\s+(?:now|a\s+(?:call|demo|consultation)))?|"
+        r"request\s+(?:a\s+)?demo|schedule\s+(?:a\s+)?call|"
+        r"contact\s+us|connect\s+now|enquire\s+now|"
+        r"get\s+started|learn\s+more|read\s+more|"
+        r"view\s+(?:details|more)|find\s+out\s+more|"
+        r"download(?:\s+(?:now|syllabus|brochure))?"
+        r")$",
+        re.IGNORECASE,
+    )
+    _LOGIN_LABEL_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^(?:[\w&.-]+\s+){0,4}(?:crm\s+)?(?:log\s*in|login)$",
+        re.IGNORECASE,
+    )
+
+    def _class_names(self, tag: Tag) -> Iterable[str]:
+        classes = tag.get("class") or []
+        if isinstance(classes, str):
+            classes = classes.split()
+
+        for value in classes:
+            yield normalize_identifier(value)
 
     def _has_hidden_hint(self, tag: Tag) -> bool:
         return (
@@ -76,21 +120,15 @@ class HTMLCleaner:
     ) -> bool:
         """Check the node and its ancestors within the selected root."""
         current: Tag | None = tag
-
         while current is not None:
             if current.name == "details":
                 return True
-
             if str(current.get("id", "")) in panel_ids:
                 return True
-
             if current is root:
                 break
-
             current = current.parent
-
         return False
-
 
     def resolve_hidden_tags(self, root: Tag) -> None:
         """
@@ -144,16 +182,16 @@ class HTMLCleaner:
             cast(str, soup.html.get("lang", "")) if soup.html is not None else None
         )
         return {
-            "title": self.normalize_text(title) if title is not None else None,
-            "description": self.normalize_text(description)
+            "title": normalize_text(title) if title is not None else None,
+            "description": normalize_text(description)
             if description is not None
             else None,
             "canonical_url": canonical_url,
-            "og_title": self.normalize_text(og_title) if og_title is not None else None,
-            "og_description": self.normalize_text(og_description)
+            "og_title": normalize_text(og_title) if og_title is not None else None,
+            "og_description": normalize_text(og_description)
             if og_description is not None
             else None,
-            "language": self.normalize_text(language) if language is not None else None,
+            "language": normalize_text(language) if language is not None else None,
         }
 
     def find_content_root(self, soup: BeautifulSoup) -> Tag:
@@ -183,7 +221,6 @@ class HTMLCleaner:
             or stats["list_count"] > 0
             or stats["table_count"] > 0
         )
-
         return stats["text_length"] >= 200 and has_structured_content
 
     def inspect_content_root(self, root: Tag | None) -> dict[str, int]:
@@ -240,7 +277,7 @@ class HTMLCleaner:
         """Remove short captions that describe media rather than page content."""
         media_prefixes = ("image", "photo", "credit", "pictured", "photograph")
         for caption in soup.find_all("figcaption"):
-            text = self.normalize_text(caption.get_text(" ", strip=True))
+            text = normalize_text(caption.get_text(" ", strip=True))
             if not text or len(text) > 120:
                 continue
             if text in {"image", "photo", "credits", "image credit"} or text.startswith(
@@ -248,37 +285,106 @@ class HTMLCleaner:
             ):
                 caption.decompose()
 
-    def _remove_link_dense_lists(self, root: Tag) -> None:
-        """Remove short lists that are primarily navigation links."""
-        for list_tag in root.find_all(["ul", "ol"]):
-            if list_tag.decomposed or list_tag.parent is None:
+    def _remove_decorative_elements(self, root: Tag) -> None:
+        """Remove icon-only elements before they become standalone text units."""
+        candidates = root.find_all(
+            ["a", "button", "div", "i", "li", "p", "span", "svg"]
+        )
+        for tag in reversed(candidates):
+            if tag.decomposed or tag.parent is None:
                 continue
-            links = list_tag.find_all("a")
-            text = self.normalize_text(list_tag.get_text(" ", strip=True))
-            link_text = self.normalize_text(
+
+            text = normalize_text(tag.get_text(" ", strip=True))
+            if not text:
+                continue
+
+            role = str(tag.get("role", "")).strip().casefold()
+            aria_hidden = (
+                str(tag.get("aria-hidden", "")).strip().casefold() == "true"
+            )
+            identifier = " ".join(
+                [
+                    str(tag.get("id", "")),
+                    " ".join(str(value) for value in (tag.get("class") or [])),
+                ]
+            ).casefold()
+            is_icon_element = (
+                tag.name in {"i", "svg"}
+                or role in {"img", "presentation"}
+                or "icon" in identifier
+            )
+            has_words_or_numbers = any(character.isalnum() for character in text)
+
+            if not has_words_or_numbers or (
+                len(text) <= 40 and (is_icon_element or aria_hidden)
+            ):
+                tag.decompose()
+
+    def _remove_link_dense_navigation(self, root: Tag) -> None:
+        """Remove navigation clusters even when a site uses generic containers."""
+        candidates = root.find_all(["div", "header", "menu", "ol", "section", "ul"])
+        navigation_clusters: list[Tag] = []
+        for container in candidates:
+            if container.decomposed or container.parent is None:
+                continue
+
+            links = container.find_all("a")
+            if len(links) < 2:
+                continue
+
+            text = normalize_text(container.get_text(" ", strip=True))
+            if not text or len(text) > 1500:
+                continue
+
+            link_text = normalize_text(
                 " ".join(link.get_text(" ", strip=True) for link in links)
             )
-            if (
-                len(links) >= 2
-                and 0 < len(text) <= 300
-                and len(link_text) / len(text) >= 0.7
-                and all(len(link.get_text(" ", strip=True)) <= 80 for link in links)
-            ):
-                list_tag.decompose()
+            link_density = len(link_text) / len(text)
+            average_chars_per_link = len(text) / len(links)
+            short_link_labels = all(
+                len(normalize_text(link.get_text(" ", strip=True))) <= 80
+                for link in links
+            )
+
+            is_link_dense = link_density >= 0.7
+            is_navigation_hub = (
+                len(links) >= 8 and average_chars_per_link <= 45
+            )
+            if short_link_labels and (is_link_dense or is_navigation_hub):
+                navigation_clusters.append(container)
+
+        cluster_ids = {id(cluster) for cluster in navigation_clusters}
+        for cluster in navigation_clusters:
+            if any(id(parent) in cluster_ids for parent in cluster.parents):
+                continue
+            cluster.decompose()
 
     def _remove_standalone_ctas(self, root: Tag) -> None:
-        """Remove short, link-only calls to action."""
+        """Remove short action controls and link-dominated CTA wrappers."""
         cta_re = re.compile(
-            r"\b(view|click|learn more|read more|visit|download|apply now|"
-            r"contact us|find out more)\b",
+            r"\b(view|click|learn more|read more|visit|download|apply|"
+            r"register|enrol|book|contact|connect|enquire|get started|"
+            r"find out more)\b",
             re.IGNORECASE,
         )
+
+        for control in root.find_all(["a", "button"]):
+            if control.decomposed or control.parent is None:
+                continue
+            label = normalize_text(control.get_text(" ", strip=True))
+            if not label or len(label) > 100:
+                continue
+            if self._CTA_LABEL_RE.fullmatch(label) or self._LOGIN_LABEL_RE.fullmatch(
+                label
+            ):
+                control.decompose()
+
         for paragraph in root.find_all(["p", "div"]):
             if paragraph.decomposed or paragraph.parent is None:
                 continue
-            text = self.normalize_text(paragraph.get_text(" ", strip=True))
+            text = normalize_text(paragraph.get_text(" ", strip=True))
             links = paragraph.find_all("a")
-            link_text = self.normalize_text(
+            link_text = normalize_text(
                 " ".join(link.get_text(" ", strip=True) for link in links)
             )
             if (
@@ -379,10 +485,6 @@ class HTMLCleaner:
             },
         )
 
-    def normalize_text(self, text: str) -> str:
-        text = re.sub(r"\s+", " ", text)
-        return text.strip()
-
     def _remove_duplicate_siblings(self, parent: Tag) -> None:
         seen: set[str] = set()
 
@@ -392,7 +494,7 @@ class HTMLCleaner:
             ["section", "article", "div", "aside", "main"], recursive=False
         )
         for child in children:
-            text = self.normalize_text(child.get_text(" ", strip=True))
+            text = normalize_text(child.get_text(" ", strip=True))
             if len(text) < 50:
                 continue
             fingerprint = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -414,7 +516,9 @@ class HTMLCleaner:
 
         root = self.find_content_root(soup)
         self._remove_conditional_junk(root)
-        self._remove_link_dense_lists(root)
+        self._remove_decorative_elements(root)
+        self.faq_parser.group_faq_items(soup, root)
+        self._remove_link_dense_navigation(root)
         self._remove_standalone_ctas(root)
         self._remove_duplicate_siblings(root)
         self.resolve_hidden_tags(root)
