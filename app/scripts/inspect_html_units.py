@@ -1,9 +1,9 @@
-"""Inspect HTML knowledge units in the terminal or a readable text file.
+"""Inspect HTML knowledge units fetched from a URL.
 
 Run from the repository root:
     python -m app.scripts.inspect_html_units SOURCE
 
-SOURCE can be an HTTP(S) URL or a local .html/.htm file.
+SOURCE must be an HTTP(S) URL.
 """
 
 import argparse
@@ -13,16 +13,11 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import unquote, urlparse
-
-import httpx
 
 from app.services.training.html_ingestion.pipeline import HtmlIngestionPipeline
 from app.services.training.knowledge_unit import KnowledgeUnit
 
-DEFAULT_OUTPUT_DIR = Path(
-    r"C:\Users\Ilamuhil ilavenil\OneDrive\Desktop\outputs"
-)
+DEFAULT_OUTPUT_DIR = Path(r"C:\Users\Ilamuhil ilavenil\OneDrive\Desktop\outputs")
 
 
 def format_unit(unit: KnowledgeUnit, *, number: int, total: int) -> str:
@@ -71,27 +66,6 @@ def write_units_to_file(
     return output_path
 
 
-def load_source(source: str) -> tuple[str, str]:
-    """Load HTML from a URL or a local HTML file."""
-    parsed_url = urlparse(source)
-    if parsed_url.scheme in {"http", "https"} and parsed_url.netloc:
-        response = httpx.get(
-            source,
-            follow_redirects=True,
-            timeout=30.0,
-            headers={"Accept": "text/html,application/xhtml+xml"},
-        )
-        response.raise_for_status()
-        return response.text, Path(unquote(parsed_url.path)).name or "html_source"
-
-    source_path = Path(source)
-    if not source_path.is_file():
-        raise ValueError(f"Expected an HTTP(S) URL or existing HTML file: {source}")
-    if source_path.suffix.lower() not in {".html", ".htm"}:
-        raise ValueError(f"Expected an .html or .htm file: {source}")
-    return source_path.read_text(encoding="utf-8"), source_path.name
-
-
 def main() -> int:
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -110,8 +84,8 @@ def main() -> int:
 
     logging.basicConfig(level=logging.WARNING)
     try:
-        html, source_name = load_source(args.source)
-        units = HtmlIngestionPipeline().run(html)
+        units = HtmlIngestionPipeline().run(args.source)
+        source_name = args.source
     except Exception:
         logging.exception("Could not inspect HTML source: %s", args.source)
         return 1
@@ -120,7 +94,9 @@ def main() -> int:
         output_path = write_units_to_file(units, source_name=source_name)
         print(f"Saved {len(units)} knowledge units to: {output_path}", flush=True)
     else:
-        print(f"\nHTML source: {source_name}\nKnowledge units: {len(units)}", flush=True)
+        print(
+            f"\nHTML source: {source_name}\nKnowledge units: {len(units)}", flush=True
+        )
         for number, unit in enumerate(units, start=1):
             print_unit(unit, number=number, total=len(units))
 

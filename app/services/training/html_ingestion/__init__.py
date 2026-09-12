@@ -1,6 +1,7 @@
 """HTML ingestion pipeline for training data."""
 
 from app.services.training.html_ingestion.html_cleaner import HTMLCleaner
+from app.services.training.html_ingestion.html_extractor import HtmlExtractor
 from app.services.training.html_ingestion.markdown_converter import MarkdownConverter
 from app.services.training.html_ingestion.markdown_parser import MarkdownUnitParser
 from app.services.training.html_ingestion.pipeline import HtmlIngestionPipeline
@@ -10,6 +11,7 @@ from app.services.training.html_ingestion.pipeline import HtmlIngestionPipeline
 
 __all__ = [
     "HTMLCleaner",
+    "HtmlExtractor",
     "HtmlIngestionPipeline",
     "MarkdownConverter",
     "MarkdownUnitParser",
