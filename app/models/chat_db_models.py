@@ -72,7 +72,7 @@ class Documents(Base):
         "Embeddings", back_populates="document", uselist=False
     )
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    # * Metadata structure
+    # * Metadata structure will be the same as that of knowledge units generated from the data transformation pipeline
     # * table : {source:{page:int},structure:{content_type:"table",heading_path:[str],domain:{}}
     # * csv : {source:{row:int},structure:{content_type:"row",heading_path:[str],domain:{}}
     # * html : {source:{url:str},structure:{content_type:"html",heading_path:[str],domain:{}}
