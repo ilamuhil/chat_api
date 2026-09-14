@@ -8,9 +8,11 @@ from typing import ClassVar, cast
 from bs4 import BeautifulSoup, Tag
 from bs4.element import Comment
 
+from app.config.logging_config import setup_logging
 from app.helpers.utils import normalize_identifier, normalize_text
 from app.services.training.html_ingestion.faq_parser import FAQParser
 
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -85,6 +87,15 @@ class HTMLCleaner:
     )
     _LOGIN_LABEL_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"^(?:[\w&.-]+\s+){0,4}(?:crm\s+)?(?:log\s*in|login)$",
+        re.IGNORECASE,
+    )
+    _BOLD_STYLE_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:^|;)\s*font-weight\s*:\s*(?:bold|[6-9]00)\s*(?:;|$)",
+        re.IGNORECASE,
+    )
+    _BOLD_CLASS_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:^|_)(?:bold|semibold|font_bold|font_semibold|"
+        r"font_weight_(?:bold|[6-9]00)|fw_[6-9]00)(?:_|$)",
         re.IGNORECASE,
     )
 
@@ -285,6 +296,32 @@ class HTMLCleaner:
             ):
                 caption.decompose()
 
+    def _is_visually_bold(self, tag: Tag) -> bool:
+        if tag.find(["strong", "b"]) is not None:
+            return True
+        if self._BOLD_STYLE_RE.search(str(tag.get("style", ""))):
+            return True
+        return any(
+            self._BOLD_CLASS_RE.search(class_name)
+            for class_name in self._class_names(tag)
+        )
+
+    def _promote_visual_table_headers(self, root: Tag) -> None:
+        """Promote visually bold first rows when tables omit ``th`` cells."""
+        for table in root.find_all("table"):
+            if table.find("th") is not None:
+                continue
+
+            first_row = table.find("tr")
+            if first_row is None:
+                continue
+            cells = first_row.find_all("td", recursive=False)
+            if not cells or not all(self._is_visually_bold(cell) for cell in cells):
+                continue
+
+            for cell in cells:
+                cell.name = "th"
+
     def _remove_decorative_elements(self, root: Tag) -> None:
         """Remove icon-only elements before they become standalone text units."""
         candidates = root.find_all(
@@ -299,9 +336,7 @@ class HTMLCleaner:
                 continue
 
             role = str(tag.get("role", "")).strip().casefold()
-            aria_hidden = (
-                str(tag.get("aria-hidden", "")).strip().casefold() == "true"
-            )
+            aria_hidden = str(tag.get("aria-hidden", "")).strip().casefold() == "true"
             identifier = " ".join(
                 [
                     str(tag.get("id", "")),
@@ -347,9 +382,7 @@ class HTMLCleaner:
             )
 
             is_link_dense = link_density >= 0.7
-            is_navigation_hub = (
-                len(links) >= 8 and average_chars_per_link <= 45
-            )
+            is_navigation_hub = len(links) >= 8 and average_chars_per_link <= 45
             if short_link_labels and (is_link_dense or is_navigation_hub):
                 navigation_clusters.append(container)
 
@@ -518,6 +551,7 @@ class HTMLCleaner:
         self._remove_conditional_junk(root)
         self._remove_decorative_elements(root)
         self.faq_parser.group_faq_items(soup, root)
+        self._promote_visual_table_headers(root)
         self._remove_link_dense_navigation(root)
         self._remove_standalone_ctas(root)
         self._remove_duplicate_siblings(root)

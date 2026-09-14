@@ -4,7 +4,7 @@ from typing import Any, ClassVar
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-from app.services.training.knowledge_unit import KnowledgeUnit
+from app.services.training.knowledge_unit import KnowledgeUnit, SourceType
 
 
 @dataclass
@@ -137,10 +137,12 @@ class MarkdownUnitParser:
         heading_path: list[str],
         content_type: str,
         source_order: int,
+        source_type: SourceType,
         **metadata: Any,
     ) -> KnowledgeUnit:
         return KnowledgeUnit(
             content=content,
+            source_type=source_type,
             metadata={
                 "source": page_meta.copy(),
                 "structure": {
@@ -171,6 +173,7 @@ class MarkdownUnitParser:
         page_meta: dict[str, str | None],
         heading_path: list[str],
         source_order: int,
+        source_type: SourceType,
     ) -> KnowledgeUnit | None:
         if not token.content.strip():
             return None
@@ -180,6 +183,7 @@ class MarkdownUnitParser:
             heading_path,
             "code",
             source_order,
+            source_type=source_type,
             info=token.info,
         )
 
@@ -191,6 +195,7 @@ class MarkdownUnitParser:
         page_meta: dict[str, str | None],
         heading_path: list[str],
         source_order: int,
+        source_type: SourceType,
     ) -> tuple[int, KnowledgeUnit]:
         token = tokens[index]
         if token.map is None:
@@ -202,6 +207,7 @@ class MarkdownUnitParser:
             heading_path,
             "blockquote",
             source_order,
+            source_type=source_type,
         )
         return self.find_close_index(tokens, index) + 1, unit
 
@@ -212,6 +218,7 @@ class MarkdownUnitParser:
         page_meta: dict[str, str | None],
         heading_path: list[str],
         source_order: int,
+        source_type: SourceType,
     ) -> tuple[int, KnowledgeUnit]:
         next_index, headers, rows = self._parse_table(tokens, index)
         unit = self._build_unit(
@@ -220,6 +227,7 @@ class MarkdownUnitParser:
             heading_path,
             "table",
             source_order,
+            source_type=source_type,
             headers=headers,
             rows=rows,
         )
@@ -234,6 +242,7 @@ class MarkdownUnitParser:
         page_meta: dict[str, str | None],
         heading_path: list[str],
         source_order: int,
+        source_type: SourceType,
     ) -> tuple[int, KnowledgeUnit]:
         token = tokens[index]
         if token.map is None:
@@ -247,6 +256,7 @@ class MarkdownUnitParser:
             current_path or heading_path,
             "list",
             source_order,
+            source_type=source_type,
             list_kind=list_kind,
         )
         return self.find_close_index(tokens, index) + 1, unit
@@ -258,6 +268,7 @@ class MarkdownUnitParser:
         page_meta: dict[str, str | None],
         heading_path: list[str],
         source_order: int,
+        source_type: SourceType,
     ) -> tuple[int, KnowledgeUnit]:
         if index + 1 >= len(tokens):
             raise ValueError("Paragraph token has no inline content")
@@ -267,11 +278,12 @@ class MarkdownUnitParser:
             heading_path,
             "text",
             source_order,
+            source_type,
         )
         return index + 3, unit
 
     def parse(
-        self, markdown: str, page_meta: dict[str, str | None]
+        self, markdown: str, page_meta: dict[str, str | None], source_type: SourceType
     ) -> list[KnowledgeUnit]:
         tokens = self.markdown_parser.parse(markdown)
         units: list[KnowledgeUnit] = []
@@ -289,7 +301,7 @@ class MarkdownUnitParser:
                 continue
             if token.type in {"fence", "code_block"}:
                 unit = self._parse_code_unit(
-                    token, page_meta, heading_path, source_order
+                    token, page_meta, heading_path, source_order, source_type
                 )
                 index += 1
             elif token.type == "blockquote_open":
@@ -300,6 +312,7 @@ class MarkdownUnitParser:
                     page_meta,
                     heading_path,
                     source_order,
+                    source_type,
                 )
             elif token.type == "table_open":
                 index, unit = self._parse_table_unit(
@@ -308,6 +321,7 @@ class MarkdownUnitParser:
                     page_meta,
                     heading_path,
                     source_order,
+                    source_type,
                 )
             elif token.type in self.LIST_OPEN_TYPES:
                 index, unit = self._parse_list_unit(
@@ -318,6 +332,7 @@ class MarkdownUnitParser:
                     page_meta,
                     heading_path,
                     source_order,
+                    source_type,
                 )
             elif token.type == "paragraph_open":
                 index, unit = self._parse_paragraph_unit(
@@ -326,6 +341,7 @@ class MarkdownUnitParser:
                     page_meta,
                     heading_path,
                     source_order,
+                    source_type,
                 )
             else:
                 index += 1

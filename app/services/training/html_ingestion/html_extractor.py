@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import ssl
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -24,6 +25,7 @@ _VALID_URL_RE = re.compile(
 class HtmlExtractor:
     """Fetch HTML from a public HTTP(S) URL."""
 
+    tls_context: ssl.SSLContext = field(default_factory=ssl.create_default_context)
     timeout: float = 30.0
     user_agent: str = "ChatAPI/1.0 HTML extractor"
     _client: httpx.Client | None = field(default=None, repr=False)
@@ -44,6 +46,7 @@ class HtmlExtractor:
                     follow_redirects=True,
                     timeout=self.timeout,
                     headers=headers,
+                    verify=self.tls_context,
                 ) as client:
                     response = client.get(url)
             response.raise_for_status()

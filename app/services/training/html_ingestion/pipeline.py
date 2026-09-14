@@ -5,7 +5,7 @@ from app.services.training.html_ingestion.html_cleaner import HTMLCleaner
 from app.services.training.html_ingestion.html_extractor import HtmlExtractor
 from app.services.training.html_ingestion.markdown_converter import MarkdownConverter
 from app.services.training.html_ingestion.markdown_parser import MarkdownUnitParser
-from app.services.training.knowledge_unit import KnowledgeUnit
+from app.services.training.knowledge_unit import KnowledgeUnit, SourceType
 
 logger = logging.getLogger(__name__)
 
@@ -28,4 +28,4 @@ class HtmlIngestionPipeline:
         if not root:
             raise ValueError("Minimum content requirement of 200 characters not met")
         markdown = self.markdown_converter.convert(root)
-        return self.markdown_unit_parser.parse(markdown, _page_meta)
+        return self.markdown_unit_parser.parse(markdown, _page_meta, SourceType.HTML)
