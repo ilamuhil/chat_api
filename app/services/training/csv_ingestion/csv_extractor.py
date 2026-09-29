@@ -39,10 +39,11 @@ class CsvPipeline:
     def extract_csv(self, csv_path: Path) -> list[KnowledgeUnit]:
         with open(csv_path, newline="", encoding="utf-8-sig") as file:
             reader = csv.DictReader(file)
-            self._validate_headers(reader.fieldnames)
+            normalized_headers = self._validate_headers(reader.fieldnames)
             units: list[KnowledgeUnit] = []
-            candidate = ""
-            candidate_columns: list[str] = []
+            header_content = "Columns: " + " | ".join(normalized_headers)
+            candidate = header_content
+            candidate_columns = normalized_headers.copy()
             for row_number, row in enumerate(reader, start=2):
                 # DictReader stores extra values under a None key.
                 if None in row:
@@ -51,6 +52,7 @@ class CsvPipeline:
                         "row contains more values than the header"
                     )
                 # Skip rows where every value is empty/whitespace.
+
                 if all(
                     value is None or normalize_text(value) == ""
                     for value in row.values()
@@ -59,21 +61,18 @@ class CsvPipeline:
                 cleaned_row = {
                     normalize_text(key): normalized_value
                     for key, value in row.items()
-                    if key is not None
-                    and (normalized_value := normalize_text(value or ""))
+                    if (normalized_value := normalize_text(value or ""))
                 }
                 if not cleaned_row:
                     continue
-                row_content = " | ".join(
-                    f"{key}: {value}" for key, value in cleaned_row.items()
-                )
+                row_content = " | ".join(f"{value}" for value in cleaned_row.values())
                 row_columns = list(cleaned_row)
                 row_tokens = count_tokens(
                     row_content,
                     self.embedding_model,
                 )
                 if row_tokens > self.MAX_TOKENS:
-                    if candidate:
+                    if candidate != header_content:
                         units.append(
                             self._build_unit(
                                 candidate,
@@ -81,17 +80,13 @@ class CsvPipeline:
                                 len(units),
                             )
                         )
-                        candidate = ""
-                        candidate_columns = []
+                    candidate = header_content
+                    candidate_columns = normalized_headers.copy()
                     oversized_units = self._split_oversized_row(
                         cleaned_row,
                         source_order_start=len(units),
                     )
                     units.extend(oversized_units)
-                    continue
-                if not candidate:
-                    candidate = row_content
-                    candidate_columns = row_columns
                     continue
                 proposed = f"{candidate}\n{row_content}"
                 proposed_tokens = count_tokens(
@@ -118,6 +113,16 @@ class CsvPipeline:
                     )
 
                     continue
+                if candidate == header_content:
+                    units.extend(
+                        self._split_oversized_row(
+                            cleaned_row,
+                            source_order_start=len(units),
+                        )
+                    )
+                    candidate = header_content
+                    candidate_columns = normalized_headers.copy()
+                    continue
                 units.append(
                     self._build_unit(
                         candidate,
@@ -125,9 +130,11 @@ class CsvPipeline:
                         len(units),
                     )
                 )
-                candidate = row_content
-                candidate_columns = row_columns
-            if candidate:
+                candidate = f"{header_content}\n{row_content}"
+                candidate_columns = list(
+                    dict.fromkeys([*normalized_headers, *row_columns])
+                )
+            if candidate != header_content:
                 units.append(
                     self._build_unit(
                         candidate,
@@ -141,7 +148,7 @@ class CsvPipeline:
     def _validate_headers(
         self,
         fieldnames: Sequence[str] | None,
-    ) -> None:
+    ) -> list[str]:
         if not fieldnames:
             raise ValueError("CSV has no header row")
 
@@ -152,6 +159,7 @@ class CsvPipeline:
 
         if len(normalized_headers) != len(set(normalized_headers)):
             raise ValueError("CSV contains duplicate headers")
+        return normalized_headers
 
     def _split_oversized_row(
         self,
