@@ -241,7 +241,9 @@ def process_training_job(
                 chat_session.commit()
             except Exception as e:
                 chat_session.rollback()
-                logger.exception("Failed to update training job status", extra={"error": str(e)})
+                logger.exception(
+                    "Failed to update training job status", extra={"error": str(e)}
+                )
     finally:
         dashboard_session.close()
         chat_session.close()

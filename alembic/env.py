@@ -6,9 +6,11 @@ from logging.config import fileConfig
 from pathlib import Path
 from urllib.parse import quote_plus
 
+from alembic import context
 from sqlalchemy import create_engine, pool
 
-from alembic import context
+from app.core.env import load_app_env
+from app.models.chat_db_models import Base
 
 # Alembic Config object
 config = context.config
@@ -55,14 +57,9 @@ def _build_postgres_url(
     )
 
 
-# Load .env/.env.local for local development
-from app.core.env import load_app_env
-
 load_app_env()
 
 # Target metadata: ONLY the chat DB models
-from app.models.chat_db_models import Base
-
 target_metadata = Base.metadata
 
 CHECKPOINTER_TABLES = {

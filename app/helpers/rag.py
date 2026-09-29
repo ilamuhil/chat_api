@@ -48,12 +48,12 @@ def create_embeddings(
             documents[i].is_active = True
         chat_session.commit()
         logger.info(f"Embeddings created for source: {source_id}")
-    except Exception:
+    except Exception as error:
         logger.exception(
             "Failed to create embeddings",
             extra={"source_id": str(source_id)},
         )
-        raise ValueError("Failed to create embeddings. Please retry.")
+        raise ValueError("Failed to create embeddings. Please retry.") from error
 
 
 def retrieve_closest_embeddings(
@@ -89,11 +89,13 @@ def retrieve_closest_embeddings(
         return [
             (embedding, document, float(dist)) for embedding, document, dist in rows
         ]
-    except Exception as e:
+    except Exception as error:
         logger.exception(
-            "Failed to retrieve closest embeddings", extra={"error": str(e)}
+            "Failed to retrieve closest embeddings", extra={"error": str(error)}
         )
-        raise ValueError("Failed to retrieve closest embeddings. Please retry.")
+        raise ValueError(
+            "Failed to retrieve closest embeddings. Please retry."
+        ) from error
 
 
 def embed_query(query: str, model: str, dimensions: int) -> list[float]:
@@ -104,9 +106,9 @@ def embed_query(query: str, model: str, dimensions: int) -> list[float]:
         )
         query_vector = embeddings.embed_query(query)
         return query_vector
-    except Exception as e:
-        logger.exception("Failed to embed query", extra={"error": str(e)})
-        raise ValueError("Failed to embed query. Please retry.")
+    except Exception as error:
+        logger.exception("Failed to embed query", extra={"error": str(error)})
+        raise ValueError("Failed to embed query. Please retry.") from error
 
 
 def count_tokens(text: str, model: str) -> int:

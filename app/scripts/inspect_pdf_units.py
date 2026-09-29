@@ -18,28 +18,28 @@ DEFAULT_PDF = Path(
     r"C:\Users\Ilamuhil ilavenil\OneDrive\Desktop"
     r"\Representative institute documents and resources\Fitjee program brochure.pdf"
 )
-DEFAULT_OUTPUT_DIR = Path(
-    r"C:\Users\Ilamuhil ilavenil\OneDrive\Desktop\outputs"
-)
+DEFAULT_OUTPUT_DIR = Path(r"C:\Users\Ilamuhil ilavenil\OneDrive\Desktop\outputs")
 
 
 def format_unit(unit: KnowledgeUnit, *, number: int, total: int) -> str:
     """Share the same complete, readable format between terminal and file output."""
-    return "\n".join([
-        "",
-        "=" * 88,
-        f"KNOWLEDGE UNIT {number} / {total}",
-        f"Source order: {unit.source_order}",
-        f"Content type: {unit.content_type}",
-        f"Pages: {unit.metadata.get('source', {}).get('pages', [])}",
-        f"Heading path: {' > '.join(unit.heading_path) or '(none)'}",
-        "-" * 88,
-        "CONTENT\n",
-        unit.content,
-        "\n" + "-" * 88,
-        "METADATA\n",
-        json.dumps(unit.metadata, indent=2, ensure_ascii=False),
-    ])
+    return "\n".join(
+        [
+            "",
+            "=" * 88,
+            f"KNOWLEDGE UNIT {number} / {total}",
+            f"Source order: {unit.source_order}",
+            f"Content type: {unit.content_type}",
+            f"Pages: {unit.metadata.get('source', {}).get('pages', [])}",
+            f"Heading path: {' > '.join(unit.heading_path) or '(none)'}",
+            "-" * 88,
+            "CONTENT\n",
+            unit.content,
+            "\n" + "-" * 88,
+            "METADATA\n",
+            json.dumps(unit.metadata, indent=2, ensure_ascii=False),
+        ]
+    )
 
 
 def print_unit(unit: KnowledgeUnit, *, number: int, total: int) -> None:
@@ -72,17 +72,22 @@ def main() -> int:
 
     arguments = argparse.ArgumentParser(description=__doc__)
     arguments.add_argument(
-        "path", nargs="?", type=Path, default=DEFAULT_PDF,
+        "path",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_PDF,
         help="PDF file or directory; directories are searched recursively.",
     )
     arguments.add_argument("--max-tokens", type=int, default=512)
     arguments.add_argument("--model", default="text-embedding-3-small")
     arguments.add_argument(
-        "--write-file", action="store_true",
+        "--write-file",
+        action="store_true",
         help=f"Write units to text files in {DEFAULT_OUTPUT_DIR} instead of printing them.",
     )
     arguments.add_argument(
-        "--include-table-data", action="store_true",
+        "--include-table-data",
+        action="store_true",
         help="Also print full source-table cells in each contributing unit's metadata.",
     )
     args = arguments.parse_args()
@@ -104,7 +109,9 @@ def main() -> int:
         arguments.error(f"No PDF files found in: {path}")
 
     # Import the heavier extraction libraries only after validating arguments.
-    print(f"Loading PDF pipeline for {len(pdfs)} file(s)...", file=sys.stderr, flush=True)
+    print(
+        f"Loading PDF pipeline for {len(pdfs)} file(s)...", file=sys.stderr, flush=True
+    )
     from app.services.training.pdf_ingestion.pdf_extractor import PdfExtractor
     from app.services.training.pdf_ingestion.pdf_parser import PdfParser
 
@@ -115,7 +122,9 @@ def main() -> int:
     total_units = 0
 
     for index, pdf_path in enumerate(pdfs, start=1):
-        print(f"[{index}/{len(pdfs)}] Converting {pdf_path}", file=sys.stderr, flush=True)
+        print(
+            f"[{index}/{len(pdfs)}] Converting {pdf_path}", file=sys.stderr, flush=True
+        )
         try:
             document = extractor.convert_pdf(pdf_path)
             units = parser.chunk_pdf(
@@ -125,7 +134,9 @@ def main() -> int:
             )
             if args.write_file:
                 output_path = write_units_to_file(units, pdf_path=pdf_path)
-                print(f"Saved {len(units)} knowledge units to: {output_path}", flush=True)
+                print(
+                    f"Saved {len(units)} knowledge units to: {output_path}", flush=True
+                )
             else:
                 print(f"\nPDF: {pdf_path}\nKnowledge units: {len(units)}", flush=True)
                 for number, unit in enumerate(units, start=1):

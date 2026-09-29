@@ -77,7 +77,9 @@ def r2_delete_object(bucket: str, key: str, client: BaseClient | None = None) ->
     client.delete_object(Bucket=bucket, Key=key)
 
 
-def r2_download_to_path(bucket: str, key: str, dest_path: str, client: BaseClient | None = None) -> None:
+def r2_download_to_path(
+    bucket: str, key: str, dest_path: str, client: BaseClient | None = None
+) -> None:
     if client is None:
         client = get_r2_client()
     with open(dest_path, "wb") as f:
@@ -94,4 +96,3 @@ def r2_presigned_get_url(
         Params={"Bucket": bucket, "Key": key},
         ExpiresIn=int(expires_in),
     )
-

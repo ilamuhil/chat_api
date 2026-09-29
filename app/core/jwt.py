@@ -72,5 +72,3 @@ def verify_token(token: str, options: Options | None = None) -> dict[str, Any] |
     except Exception as e:
         logger.exception("Error verifying token", extra={"error": str(e)})
         return None
-
-

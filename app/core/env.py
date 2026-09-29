@@ -20,11 +20,15 @@ def load_app_env() -> str:
     - FASTAPI_ENV
     """
     app_env = (
-        os.getenv("APP_ENV")
-        or os.getenv("ENV")
-        or os.getenv("FASTAPI_ENV")
-        or "development"
-    ).strip().lower()
+        (
+            os.getenv("APP_ENV")
+            or os.getenv("ENV")
+            or os.getenv("FASTAPI_ENV")
+            or "development"
+        )
+        .strip()
+        .lower()
+    )
 
     # Project root (two levels up from app/core/env.py -> app -> project root)
     root = Path(__file__).resolve().parents[2]

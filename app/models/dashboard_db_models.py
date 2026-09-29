@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import datetime
-import enum
 import uuid
+from enum import StrEnum
 from typing import Any, ClassVar
 
 from sqlalchemy import (
@@ -13,7 +13,11 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    UniqueConstraint,
     text,
+)
+from sqlalchemy import (
+    Enum as SqlEnum,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -23,12 +27,12 @@ class Base(DeclarativeBase):
     pass
 
 
-class OtpType(str, enum.Enum):
+class OtpType(StrEnum):
     EMAIL = "EMAIL"
     MOBILE = "MOBILE"
 
 
-class OtpPurpose(str, enum.Enum):
+class OtpPurpose(StrEnum):
     LOGIN = "LOGIN"
     VERIFY_EMAIL = "VERIFY_EMAIL"
     VERIFY_PHONE = "VERIFY_PHONE"
@@ -56,6 +60,9 @@ class Organizations(Base):
     bots: Mapped[list[Bots]] = relationship("Bots", back_populates="organization")
     organization_members: Mapped[list[OrganizationMembers]] = relationship(
         "OrganizationMembers", back_populates="organization"
+    )
+    magic_links: Mapped[list[MagicLinks]] = relationship(
+        "MagicLinks", back_populates="organization"
     )
     invites: Mapped[list[OrganizationInvites]] = relationship(
         "OrganizationInvites", back_populates="organization"
@@ -194,6 +201,43 @@ class Users(Base):
         "OrganizationMembers", back_populates="user"
     )
     otps: Mapped[list[Otps]] = relationship("Otps", back_populates="user")
+    magic_links: Mapped[list[MagicLinks]] = relationship(
+        "MagicLinks", back_populates="user"
+    )
+
+
+class MagicLinks(Base):
+    __tablename__ = "magic_links"
+    __table_args__ = (
+        Index("magic_links_user_id_idx", "user_id"),
+        Index("magic_links_organization_id_idx", "organization_id"),
+        Index("magic_links_expires_at_idx", "expires_at"),
+        {"schema": "public"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(True), nullable=False, server_default=text("now()")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("public.users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    organization_id: Mapped[str | None] = mapped_column(
+        ForeignKey("public.organizations.id", ondelete="CASCADE")
+    )
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    expires_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(True), nullable=False
+    )
+    used_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
+
+    user: Mapped[Users] = relationship("Users", back_populates="magic_links")
+    organization: Mapped[Organizations | None] = relationship(
+        "Organizations", back_populates="magic_links"
+    )
 
 
 class OrganizationMembers(Base):
@@ -201,6 +245,7 @@ class OrganizationMembers(Base):
     __table_args__ = (
         Index("organization_members_user_id_idx", "user_id"),
         Index("organization_members_organization_id_idx", "organization_id"),
+        UniqueConstraint("organization_id", "user_id"),
         {"schema": "public"},
     )
 
@@ -229,11 +274,7 @@ class OrganizationMembers(Base):
 
 class OrganizationInvites(Base):
     __tablename__ = "organization_invites"
-    __table_args__ = (
-        Index("organization_invites_email_idx", "email"),
-        Index("organization_invites_organization_id_idx", "organization_id"),
-        {"schema": "public"},
-    )
+    __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=text("gen_random_uuid()")
@@ -277,8 +318,14 @@ class Otps(Base):
         ForeignKey("public.users.id", ondelete="CASCADE")
     )
     code: Mapped[str] = mapped_column(Text, nullable=False)
-    type: Mapped[str] = mapped_column(Text, nullable=False)
-    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    type: Mapped[OtpType] = mapped_column(
+        SqlEnum(OtpType, name="OtpType", schema="public"),
+        nullable=False,
+    )
+    purpose: Mapped[OtpPurpose] = mapped_column(
+        SqlEnum(OtpPurpose, name="OtpPurpose", schema="public"),
+        nullable=False,
+    )
 
     email: Mapped[str | None] = mapped_column(String)
     phone: Mapped[str | None] = mapped_column(String)
@@ -315,9 +362,7 @@ class Notifications(Base):
         primary_key=True, server_default=text("gen_random_uuid()")
     )
     organization_id: Mapped[str | None] = mapped_column(Text)
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("public.users.id", ondelete="CASCADE")
-    )
+    user_id: Mapped[str | None] = mapped_column(Text)
     title: Mapped[str | None] = mapped_column(Text)
     body: Mapped[str | None] = mapped_column(Text)
     type: Mapped[str | None] = mapped_column(Text)
@@ -434,7 +479,7 @@ class TrainingSources(Base):
     deleted_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     quality_status: Mapped[str | None] = mapped_column(Text)
     # ! good | warning | poor
-    quality_summary: Mapped[str | None] = mapped_column(Text)
+    quality_summary: Mapped[Any | None] = mapped_column(JSONB)
     bot: Mapped[Bots | None] = relationship("Bots", back_populates="training_sources")
     organization: Mapped[Organizations | None] = relationship(
         "Organizations", back_populates="training_sources"
@@ -472,6 +517,9 @@ class ConversationsMeta(Base):
         Text, nullable=False, server_default=text("'open'")
     )
     # ! open | closed
+    is_archived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     handover_status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'none'")
     )

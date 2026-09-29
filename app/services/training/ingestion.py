@@ -127,13 +127,13 @@ def _persist_chunks(
         ]
         chat_session.add_all(documents)
         chat_session.commit()
-    except Exception:
+    except Exception as error:
         chat_session.rollback()
         logger.exception(
             "Failed to persist training document chunks",
             extra={"source_id": str(source.id), "chunk_count": len(chunks)},
         )
-        raise ValueError("Failed to save training data.")
+        raise ValueError("Failed to save training data.") from error
 
     logger.info(
         "Document chunks persisted for training source",
@@ -235,19 +235,21 @@ def _load_file_text(source: TrainingSources, dashboard_session: Session) -> str:
         file_record = dashboard_session.scalars(
             select(Files).where(Files.path == file_path)
         ).one_or_none()
-    except Exception:
+    except Exception as error:
         logger.exception(
             "Failed to query file record for training source",
             extra={"source_id": str(source.id), "file_path": file_path},
         )
-        raise ValueError("Unable to locate the uploaded file for this training source.")
+        raise ValueError(
+            "Unable to locate the uploaded file for this training source."
+        ) from error
 
     if file_record is None or not file_record.bucket or not file_record.path:
         raise ValueError("Uploaded file metadata is incomplete.")
 
     try:
         exists = r2_object_exists(file_record.bucket, file_record.path)
-    except Exception:
+    except Exception as error:
         logger.exception(
             "Failed to check file existence in R2",
             extra={
@@ -258,7 +260,7 @@ def _load_file_text(source: TrainingSources, dashboard_session: Session) -> str:
         )
         raise ValueError(
             "Unable to verify the file in storage right now. Please retry."
-        )
+        ) from error
 
     if not exists:
         raise ValueError(
@@ -280,7 +282,7 @@ def _load_file_text(source: TrainingSources, dashboard_session: Session) -> str:
             documents = loader.load()
         except ValueError:
             raise
-        except Exception:
+        except Exception as error:
             logger.exception(
                 "Failed to download or parse training file",
                 extra={
@@ -291,7 +293,7 @@ def _load_file_text(source: TrainingSources, dashboard_session: Session) -> str:
             )
             raise ValueError(
                 "Unable to read the uploaded file. Please try a different file."
-            )
+            ) from error
 
     cleaned = clean_scraped_text(
         "\n\n".join(

@@ -22,7 +22,7 @@ from docling_core.types.doc.items.text import (
 from docling_core.types.doc.labels import DocItemLabel
 
 from app.helpers.rag import get_tokenizer
-from app.services.training.knowledge_unit import KnowledgeUnit
+from app.services.training.knowledge_unit import KnowledgeUnit, SourceType
 
 
 class NoAnchorProvider(ChunkingSerializerProvider):
@@ -182,6 +182,7 @@ class PdfParser:
         return KnowledgeUnit(
             content=content,
             source_order=source_order,
+            source_type=SourceType.PDF,
             metadata={
                 "source": {
                     "filename": filename,
@@ -205,9 +206,10 @@ class PdfParser:
         for chunk in self.chunker.chunk(dl_doc=document):
             if not isinstance(chunk, DocChunk):
                 raise TypeError(f"Expected DocChunk, got {type(chunk)}")
-            if not chunk.text.strip():
+            content = chunk.text.strip()
+            if not content:
                 continue
-            content = self.chunker.contextualize(chunk=chunk)
+
             if self.tokenizer.count_tokens(content) > self.max_tokens:
                 raise ValueError(
                     f"Content exceeds max tokens: {self.max_tokens} for chunk: {len(units)}"

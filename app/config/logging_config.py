@@ -13,21 +13,19 @@ LOGGING_CONFIG = {
     "disable_existing_loggers": False,
     # tells to not disable other loggers if any from the imported modules
     "formatters": {
-        "standard": {
-            "format": "%(asctime)s [%(levelname)s]: %(name)s - %(message)s"
-        },
+        "standard": {"format": "%(asctime)s [%(levelname)s]: %(name)s - %(message)s"},
         "json": {
             "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
             "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
             "json_ensure_ascii": False,
-            "json_indent": 2
+            "json_indent": 2,
         },
     },
     "handlers": {
         # the keys "console" and "file" are user defined labels. they should match the values in the root.handlers list
         "console": {
             "class": "logging.StreamHandler",
-            #class tells the logger which class to use to handle the log. The rest of the keys are the attributes of the class.
+            # class tells the logger which class to use to handle the log. The rest of the keys are the attributes of the class.
             "level": LOG_LEVEL,
             "formatter": "json",
         },

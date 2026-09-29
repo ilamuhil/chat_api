@@ -19,7 +19,6 @@ from sqlalchemy import Engine, inspect, text
 from app.db.session import chat_engine
 from app.models.chat_db_models import Base
 
-
 REQUIRED_EXTENSIONS = ("vector", "pgcrypto")
 
 
@@ -27,9 +26,7 @@ def ensure_postgres_extensions(engine: Engine) -> None:
     """Ensure PostgreSQL extensions required by the chat models exist."""
     with engine.begin() as connection:
         for extension in REQUIRED_EXTENSIONS:
-            connection.execute(
-                text(f"CREATE EXTENSION IF NOT EXISTS {extension}")
-            )
+            connection.execute(text(f"CREATE EXTENSION IF NOT EXISTS {extension}"))
 
 
 def existing_chat_tables(engine: Engine) -> set[str]:

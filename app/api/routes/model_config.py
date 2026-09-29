@@ -85,17 +85,17 @@ async def create_model_config(
         raise HTTPException(
             status_code=400,
             detail="bot_id and user_id must be valid UUIDs",
-        )
+        ) from None
     except IntegrityError:
         chat_db.rollback()
         raise HTTPException(
             status_code=409,
             detail="Model configuration could not be created because of a database conflict",
-        )
-    except Exception:
+        ) from None
+    except Exception as error:
         chat_db.rollback()
         logger.exception("Unexpected error creating model configuration")
         raise HTTPException(
             status_code=500,
             detail="Internal server error",
-        )
+        ) from error

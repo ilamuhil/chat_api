@@ -8,17 +8,16 @@ Create Date: 2026-08-11
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from pgvector.sqlalchemy import VECTOR
 
-
 revision: str = "a1c3e8f29b04"
-down_revision: Union[str, None] = "8d6f2a1c4b77"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "8d6f2a1c4b77"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

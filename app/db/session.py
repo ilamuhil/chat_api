@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.env import load_app_env
 
-
 load_app_env()
 
 
@@ -18,7 +17,10 @@ def _require_env(key: str) -> str:
         raise RuntimeError(f"Environment variable {key} is not set")
     return str(v).strip()
 
-def _build_postgres_url(host: str, port: str, user: str, password: str, name: str) -> str:
+
+def _build_postgres_url(
+    host: str, port: str, user: str, password: str, name: str
+) -> str:
     # URL-encode password so special characters don't break the URL.
     return (
         f"postgresql+psycopg://{user}:{quote_plus(password)}@{host}:{port}/{name}"
@@ -77,9 +79,7 @@ try:
         pool_pre_ping=True,
         pool_recycle=300,
     )
-    SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=chat_engine
-    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=chat_engine)
 except Exception:
     # Engine/session will be unavailable until env vars are set.
     pass
@@ -95,7 +95,9 @@ def create_dashboard_db_session() -> Session:
 
 def create_chat_db_session() -> Session:
     if SessionLocal is None:
-        raise RuntimeError("Python chat DB is not configured (CHAT_DB_* env vars missing).")
+        raise RuntimeError(
+            "Python chat DB is not configured (CHAT_DB_* env vars missing)."
+        )
     return SessionLocal()
 
 
@@ -120,5 +122,3 @@ def ping(engine) -> int:
         raise RuntimeError("Engine is not configured.")
     with engine.connect() as conn:
         return conn.execute(text("SELECT 1")).scalar_one()
-
-
