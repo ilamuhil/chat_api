@@ -8,6 +8,8 @@ A FastAPI-based chat application with RAG (Retrieval-Augmented Generation) capab
 - **JWT Authentication** for secure API access
 - **Background Job Processing** using Redis Queue (RQ)
 - **RAG Pipeline** for document ingestion and retrieval
+- **Hybrid retrieval** using PostgreSQL full-text search and pgvector semantic search
+- **Async database access** for API and WebSocket request paths
 - **Two Postgres databases**
   - **Dashboard DB** (used by the Next.js dashboard): orgs/bots/training sources/files
   - **Chat DB** (managed by this service, typically Neon): documents/embeddings/messages/training jobs
@@ -118,7 +120,30 @@ Create a `.env.local` file (or `.env` for production) with the following variabl
 - **Dashboard DB**: tables defined in `app/models/dashboard_db_models.py` and documented in `dashboard_db_schema.txt`.
 - **Chat DB**: tables defined in `app/models/chat_db_models.py` and documented in `chat_db_schema.txt`.
 
-The service connects to both via env “parts” in `app/db/session.py`.
+The service connects to both via environment variables in `app/db/session.py`.
+The API uses pooled `AsyncSession` factories for database work in async routes
+and WebSocket message handling. Synchronous sessions remain for RQ workers and
+other explicitly synchronous callbacks.
+
+## RAG and ingestion
+
+Training workers ingest supported sources into knowledge units before
+persistence and embedding:
+
+- HTML pages are cleaned, converted to Markdown, and parsed into structured
+  knowledge units.
+- PDFs are extracted with Docling and converted into token-aware units.
+- CSV files are converted into table-oriented units.
+- Markdown is handled by the shared Markdown parser when supplied by an
+  ingestion pipeline.
+
+Knowledge-unit structure keeps heading context in
+`metadata.structure.heading_paths`. DOCX and XLSX ingestion are not currently
+implemented.
+
+At retrieval time, keyword search uses the generated `documents.search_vector`
+GIN index. The vector combines weighted heading paths and document content.
+Semantic search uses the active embedding and bot configuration pair.
 
 ## Project Structure
 
@@ -145,6 +170,7 @@ chat_api/
 │   ├── domain/                   # Domain models (Pydantic)
 │   │   └── chat.py              # Chat session models
 │   ├── helpers/                  # Helper utilities
+│   │   ├── rag.py               # Embeddings and async vector retrieval
 │   │   └── utils.py             # Text cleaning, R2 storage helpers
 │   ├── infra/                     # Infrastructure
 │   │   ├── redis_client.py      # Redis client configuration
@@ -154,7 +180,10 @@ chat_api/
 │   │   └── dashboard_db_models.py # Dashboard DB models (orgs/bots/training sources/files)
 │   ├── services/                  # Business logic
 │   │   ├── chat.py              # Chat message handling
-│   │   └── worker_fns.py       # Background job functions (URL/file processing)
+│   │   ├── notifications.py     # Dashboard notification persistence
+│   │   └── training/            # Source ingestion and knowledge-unit creation
+│   ├── rag/                      # Query preparation and hybrid retrieval
+│   └── services/worker_fns.py   # Background job functions
 │   ├── ws/                        # WebSocket utilities
 │   │   └── auth.py              # WebSocket authentication
 │   ├── logging_config.py         # Logging configuration
@@ -256,11 +285,18 @@ audit tool to runtime dependencies.
 Chat DB tables for messages, documents, embeddings, and training jobs. Models live in `app/models/chat_db_models.py`.
 
 ### Dashboard DB (`dashboard_db_schema.txt`)
-Dashboard DB tables for orgs, bots, training sources, and files. Models live in `app/models/dashboard_db_models.py`.
+Dashboard DB tables for organizations, users, bots, training sources, files,
+conversations, leads, notifications, and follow-ups. The authoritative schema
+is maintained by Prisma; the SQLAlchemy mirror lives in
+`app/models/dashboard_db_models.py`. This service does not run dashboard
+Alembic migrations.
 
 ## Migrations (Chat DB only)
 
 Alembic is configured in `alembic/` and targets `app/models/chat_db_models.py`.
+The current Chat DB migrations include the generated
+`documents.search_vector` column and its GIN index. The vector indexes
+`metadata_json.structure.heading_paths` and `content`.
 
 ### Initialize a new Chat DB
 
@@ -301,6 +337,10 @@ Create a new migration after editing models:
 ```bash
 uv run alembic -c alembic/alembic.ini revision --autogenerate -m "describe change"
 ```
+
+Dashboard schema changes are managed by the dashboard Prisma schema. Update
+`app/models/dashboard_db_models.py` as the SQLAlchemy mirror, but do not create
+or run Alembic migrations for the Dashboard DB from this service.
 
 Apply migrations:
 

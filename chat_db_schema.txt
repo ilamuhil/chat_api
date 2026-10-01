@@ -14,11 +14,15 @@ source_id                  uuid NOT NULL
 chunk_index                integer NOT NULL
 content                    text
 created_at                 timestamptz DEFAULT now()
-section_title              text
 token_count                integer
 is_active                  boolean DEFAULT true
 deleted_at                 timestamptz
 embedding_configuration_id uuid NOT NULL
+metadata_json              jsonb
+search_vector              tsvector GENERATED ALWAYS AS (
+  weighted heading_paths from metadata_json.structure
+  plus weighted content
+) STORED
 
 UNIQUE (source_id, embedding_configuration_id, chunk_index)
   -- uq_documents_source_chunk_config_version
@@ -27,6 +31,8 @@ INDEX: documents_bot_active_embedding_configuration_idx
   ON (bot_id, is_active, embedding_configuration_id)
 INDEX: documents_source_idx
   ON (source_id)
+INDEX: ix_documents_search_vector
+  ON documents USING GIN (search_vector)
 
 
 messages
@@ -36,6 +42,7 @@ conversation_id            uuid NOT NULL
 created_at                 timestamptz DEFAULT now()
 updated_at                 timestamptz DEFAULT now()
 role                       text
+agent_id                   uuid
 content_type               text NOT NULL DEFAULT 'text'
 content                    varchar
 embedding_configuration_id uuid

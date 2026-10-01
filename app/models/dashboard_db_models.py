@@ -11,7 +11,6 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
-    String,
     Text,
     UniqueConstraint,
     text,
@@ -160,31 +159,31 @@ class Users(Base):
         onupdate=text("now()"),
     )
 
-    email: Mapped[str | None] = mapped_column(String, unique=True)
+    email: Mapped[str | None] = mapped_column(Text, unique=True)
     email_verified: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
     email_verified_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
     password_hash: Mapped[str | None] = mapped_column(Text)
-    phone: Mapped[str | None] = mapped_column(String)
+    phone: Mapped[str | None] = mapped_column(Text)
     phone_verified: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
     phone_verified_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
 
-    full_name: Mapped[str | None] = mapped_column(String)
+    full_name: Mapped[str | None] = mapped_column(Text)
     avatar_url: Mapped[str | None] = mapped_column(Text)
 
     google_id: Mapped[str | None] = mapped_column(Text, unique=True)
     github_id: Mapped[str | None] = mapped_column(Text, unique=True)
     microsoft_id: Mapped[str | None] = mapped_column(Text, unique=True)
 
-    google_email: Mapped[str | None] = mapped_column(String)
-    github_email: Mapped[str | None] = mapped_column(String)
-    microsoft_email: Mapped[str | None] = mapped_column(String)
+    google_email: Mapped[str | None] = mapped_column(Text)
+    github_email: Mapped[str | None] = mapped_column(Text)
+    microsoft_email: Mapped[str | None] = mapped_column(Text)
 
     last_logged_in: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
-    last_logged_in_ip: Mapped[str | None] = mapped_column(String)
+    last_logged_in_ip: Mapped[str | None] = mapped_column(Text)
 
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")
@@ -327,8 +326,8 @@ class Otps(Base):
         nullable=False,
     )
 
-    email: Mapped[str | None] = mapped_column(String)
-    phone: Mapped[str | None] = mapped_column(String)
+    email: Mapped[str | None] = mapped_column(Text)
+    phone: Mapped[str | None] = mapped_column(Text)
 
     expires_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True), nullable=False
@@ -340,7 +339,7 @@ class Otps(Base):
 
     attempts: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
     max_attempts: Mapped[int] = mapped_column(nullable=False, server_default=text("5"))
-    ip_address: Mapped[str | None] = mapped_column(String)
+    ip_address: Mapped[str | None] = mapped_column(Text)
     user_agent: Mapped[str | None] = mapped_column(Text)
 
     user: Mapped[Users | None] = relationship("Users", back_populates="otps")
@@ -362,7 +361,7 @@ class Notifications(Base):
         primary_key=True, server_default=text("gen_random_uuid()")
     )
     organization_id: Mapped[str | None] = mapped_column(Text)
-    user_id: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[uuid.UUID | None] = mapped_column()
     title: Mapped[str | None] = mapped_column(Text)
     body: Mapped[str | None] = mapped_column(Text)
     type: Mapped[str | None] = mapped_column(Text)
@@ -520,8 +519,8 @@ class ConversationsMeta(Base):
     is_archived: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
-    handover_status: Mapped[str] = mapped_column(
-        Text, nullable=False, server_default=text("'none'")
+    handover_status: Mapped[str | None] = mapped_column(
+        Text, server_default=text("'none'")
     )
     # ! none | requested | accepted | timed_out
     closed_by: Mapped[str | None] = mapped_column(Text)

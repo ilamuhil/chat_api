@@ -1,9 +1,15 @@
-File upload flow
+Training and file-upload flow notes
 
-1. Send files to API call: /training/upload/init
+This document describes the dashboard/API hand-off expected by the training
+worker. The current Chat API exposes queue/delete training operations; upload
+initialization and object-upload endpoints are owned by the dashboard service.
+Keep the status values below aligned with both services.
+
+1. The dashboard service initializes a file upload and creates a training
+   source.
 
   a. Create training source
-      - Status "pending" with computed content hash
+      - Status `pending` with a computed content hash
   b. Upload files
 
 ---------
@@ -15,17 +21,18 @@ Retry mechanism: use the same init API
       - If exists, return existing training source id
       - Else, do 1a.
 
-2. Update database
+2. Finalize the upload and update the dashboard database.
 
    Check if file exists in storage for each of the training sources:
 
    - If yes:
        - DB mutation wrapped in a transaction:
-           a. Update training source with "pending" status to "created" for the uploaded file
-           b. Create file record with status "uploaded"
+           a. Update the training source from `pending` to `created`
+           b. Create a file record with status `uploaded`
 
    - Else:
-       a. Update training source status to "update failed" for non-existent files in storage
+       a. Update the training source status to `upload_failed` when the object
+          is missing from storage
 
 Training source statuses (phase 1):
 

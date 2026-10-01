@@ -1,5 +1,9 @@
 dashboard_db (public schema)
 
+Authoritative source: the dashboard Prisma schema. SQLAlchemy mirrors this
+schema in app/models/dashboard_db_models.py. No dashboard Alembic migrations
+are managed by this service.
+
 PostgreSQL types are shown using their database equivalents. Columns without
 an explicit DEFAULT do not have a server-side default in the model. Python-side
 enum values are noted separately; the model maps those columns as text and does
@@ -51,19 +55,19 @@ email                 text UNIQUE
 email_verified        boolean NOT NULL DEFAULT false
 email_verified_at     timestamptz
 password_hash         text
-phone                 varchar
+phone                 text
 phone_verified        boolean NOT NULL DEFAULT false
 phone_verified_at     timestamptz
-full_name             varchar
+full_name             text
 avatar_url             text
 google_id             text UNIQUE
 github_id             text UNIQUE
 microsoft_id          text UNIQUE
-google_email          varchar
-github_email          varchar
-microsoft_email       varchar
+google_email          text
+github_email          text
+microsoft_email       text
 last_logged_in        timestamptz
-last_logged_in_ip     varchar
+last_logged_in_ip     text
 is_active             boolean NOT NULL DEFAULT true
 is_banned             boolean NOT NULL DEFAULT false
 banned_until          timestamptz
@@ -86,6 +90,8 @@ created_at         timestamptz NOT NULL DEFAULT now()
 organization_id    text REFERENCES organizations(id) ON DELETE CASCADE
 role               text
 user_id            uuid REFERENCES users(id) ON DELETE CASCADE
+
+UNIQUE (organization_id, user_id)
 
 INDEX: organization_members_user_id_idx
   ON (user_id)
@@ -118,14 +124,14 @@ type               text NOT NULL
   -- Python enum values: EMAIL, MOBILE
 purpose            text NOT NULL
   -- Python enum values: LOGIN, VERIFY_EMAIL, VERIFY_PHONE, RESET_PASSWORD
-email              varchar
-phone              varchar
+email              text
+phone              text
 expires_at         timestamptz NOT NULL
 used_at            timestamptz
 is_used            boolean NOT NULL DEFAULT false
 attempts           integer NOT NULL DEFAULT 0
 max_attempts       integer NOT NULL DEFAULT 5
-ip_address         varchar
+ip_address         text
 user_agent         text
 
 INDEX: otps_user_id_idx
@@ -187,8 +193,12 @@ content_hash       text
 original_filename  text
 size_bytes         bigint
 mime_type          text
+updated_at         timestamptz NOT NULL DEFAULT now()
+last_trained_at    timestamptz
 deleted_at         timestamptz
 deleted_by         text
+quality_status     text
+quality_summary    jsonb
 
 
 conversations_meta
@@ -198,10 +208,15 @@ created_at           timestamptz NOT NULL DEFAULT now()
 mode                 text NOT NULL DEFAULT 'ai'
 organization_id       text REFERENCES organizations(id) ON DELETE CASCADE
 bot_id                uuid REFERENCES bots(id) ON DELETE SET NULL
+lead_id               uuid REFERENCES leads(id) ON DELETE SET NULL
 api_key_id            uuid REFERENCES api_keys(id) ON DELETE SET NULL
 user_name             text
 user_email            text
 status                text
+is_archived           boolean NOT NULL DEFAULT false
+handover_status       text DEFAULT 'none'
+closed_by             text
+closed_at             timestamptz
 last_message_snippet  text
 last_message_at       timestamptz
 
@@ -215,5 +230,60 @@ email             text
 phone             text
 organization_id   text REFERENCES organizations(id) ON DELETE CASCADE
 bot_id            uuid REFERENCES bots(id) ON DELETE SET NULL
-conversation_id   uuid REFERENCES conversations_meta(id) ON DELETE SET NULL
+visitor_id        uuid
+enquirer_type     text
+student_name      text
+student_age       text
+student_gender    text
+course_interest   text
+education_level   text
+preferred_mode    text
+joining_timeline  text
+primary_intent    text
+lead_priority     text
+priority_reason   text
+ai_summary        text
+recommended_next_action text
+pipeline_stage    text
+consent_to_contact boolean DEFAULT false
+updated_at        timestamptz NOT NULL DEFAULT now()
+deleted_at        timestamptz
+deleted_by_id     uuid
+
+
+notifications
+-------------
+id              uuid PRIMARY KEY DEFAULT gen_random_uuid()
+organization_id text
+user_id         uuid
+title           text
+body            text
+type            text
+read_at         timestamptz
+created_at      timestamptz NOT NULL DEFAULT now()
+metadata        jsonb
+channels        jsonb
+
+INDEX: notifications_user_id_read_at_created_at_idx
+  ON (user_id, read_at, created_at DESC)
+
+
+lead_follow_ups
+---------------
+id             uuid PRIMARY KEY DEFAULT gen_random_uuid()
+counsellor_id  uuid
+follow_up_type text
+status         text
+scheduled_for  timestamptz
+completed_at   timestamptz
+outcome        text
+notes          text
+created_at     timestamptz NOT NULL DEFAULT now()
+updated_at     timestamptz NOT NULL DEFAULT now()
+lead_id        uuid NOT NULL REFERENCES leads(id) ON DELETE CASCADE
+deleted_at     timestamptz
+deleted_by_id  uuid
+
+INDEX: lead_follow_ups_lead_deleted_scheduled_idx
+  ON (lead_id, deleted_at, scheduled_for)
 
