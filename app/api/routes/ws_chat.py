@@ -62,7 +62,9 @@ async def chat(websocket: WebSocket):
             "Error parsing visitor UUID", extra={"visitor_id": session.visitor_id}
         )
         return
-    lead_exists, lead_id = has_lead(visitor_uuid, bot_id, session.organization_id)
+    lead_exists, lead_id = await has_lead(
+        visitor_uuid, bot_id, session.organization_id
+    )
     form_required = websocket == session.user_socket and not lead_exists
     ai_queue: asyncio.Queue[dict[str, Any]] | None = None
     ai_worker_task: asyncio.Task[None] | None = None

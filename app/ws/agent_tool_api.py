@@ -10,49 +10,41 @@ from redis.exceptions import RedisError
 from sqlalchemy import or_, select, update
 from sqlalchemy.engine import CursorResult
 
-from app.db.session import create_dashboard_db_session
+from app.db.session import (
+    create_async_dashboard_db_session,
+    create_dashboard_db_session,
+)
 from app.infra.redis_client import redis_client
 from app.models.dashboard_db_models import ConversationsMeta
 
 logger = logging.getLogger(__name__)
 
 
-def _request_handover_sync(
-    conversation_id: uuid.UUID,
-) -> bool:
-    with create_dashboard_db_session() as session:
-        result = cast(
-            CursorResult[Any],
-            session.execute(
-                update(ConversationsMeta)
-                .where(
-                    ConversationsMeta.id == conversation_id,
-                    ConversationsMeta.status == "open",
-                    or_(
-                        ConversationsMeta.handover_status == "none",
-                        ConversationsMeta.handover_status.is_(None),
-                    ),
-                )
-                .values(handover_status="requested")
-            ),
-        )
-
-        if result.rowcount != 1:
-            session.rollback()
-            return False
-
-        session.commit()
-        return True
-
-
 async def request_conversation_handover(
     conversation_id: uuid.UUID,
 ) -> bool:
     try:
-        return await asyncio.to_thread(
-            _request_handover_sync,
-            conversation_id,
-        )
+        async with create_async_dashboard_db_session() as session:
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(ConversationsMeta)
+                    .where(
+                        ConversationsMeta.id == conversation_id,
+                        ConversationsMeta.status == "open",
+                        or_(
+                            ConversationsMeta.handover_status == "none",
+                            ConversationsMeta.handover_status.is_(None),
+                        ),
+                    )
+                    .values(handover_status="requested")
+                ),
+            )
+            if result.rowcount != 1:
+                await session.rollback()
+                return False
+            await session.commit()
+            return True
     except Exception:
         logger.exception(
             "Failed to request conversation handover",
@@ -78,9 +70,13 @@ def _get_conversation_sync(
 async def get_conversation(
     conversation_id: uuid.UUID, open_only: bool = True
 ) -> ConversationsMeta | None:
-    return await asyncio.to_thread(
-        _get_conversation_sync, conversation_id, open_only=open_only
-    )
+    async with create_async_dashboard_db_session() as session:
+        statement = select(ConversationsMeta).where(
+            ConversationsMeta.id == conversation_id
+        )
+        if open_only:
+            statement = statement.where(ConversationsMeta.status == "open")
+        return await session.scalar(statement)
 
 
 def _publish_to_channel_sync(
@@ -120,26 +116,6 @@ async def publish_to_channel(
     )
 
 
-def _update_handover_status_sync(
-    conversation_id: uuid.UUID,
-    status: str,
-) -> bool:
-    with create_dashboard_db_session() as session:
-        statement = update(ConversationsMeta).where(
-            ConversationsMeta.id == conversation_id,
-            ConversationsMeta.status == "open",
-        )
-        result = cast(
-            CursorResult[Any],
-            session.execute(statement.values(handover_status=status)),
-        )
-        if result.rowcount != 1:
-            session.rollback()
-            return False
-        session.commit()
-        return True
-
-
 def _timeout_handover_status_sync(conversation_id: uuid.UUID) -> bool:
     with create_dashboard_db_session() as session:
         result = cast(
@@ -166,11 +142,20 @@ async def update_conversation_handover_status(
     status: str,
 ) -> bool:
     try:
-        return await asyncio.to_thread(
-            _update_handover_status_sync,
-            conversation_id,
-            status,
-        )
+        async with create_async_dashboard_db_session() as session:
+            statement = update(ConversationsMeta).where(
+                ConversationsMeta.id == conversation_id,
+                ConversationsMeta.status == "open",
+            )
+            result = cast(
+                CursorResult[Any],
+                await session.execute(statement.values(handover_status=status)),
+            )
+            if result.rowcount != 1:
+                await session.rollback()
+                return False
+            await session.commit()
+            return True
     except Exception:
         logger.exception(
             "Error updating conversation handover status",

@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_chat_db
+from app.db.session import get_async_chat_db
 from app.models.chat_db_models import BotConfigurations, EmbeddingConfigurations
 
 
@@ -35,7 +35,7 @@ router = APIRouter()
 @router.post("/model-config/create", response_model=ModelConfigCreateResponse)
 async def create_model_config(
     request: ModelConfigCreate,
-    chat_db: Annotated[Session, Depends(get_chat_db)],
+    chat_db: Annotated[AsyncSession, Depends(get_async_chat_db)],
 ):
     if not request.bot_id:
         logger.error("Bot Id was not provided by Dashboard server")
@@ -64,7 +64,7 @@ async def create_model_config(
             state="draft",
         )
         chat_db.add(embedding_configuration)
-        chat_db.flush()
+        await chat_db.flush()
 
         bot_configuration = BotConfigurations(
             bot_id=bot_uuid,
@@ -78,22 +78,22 @@ async def create_model_config(
             state="draft",
         )
         chat_db.add(bot_configuration)
-        chat_db.commit()
+        await chat_db.commit()
         return ModelConfigCreateResponse(config_id=bot_configuration.id)
     except ValueError:
-        chat_db.rollback()
+        await chat_db.rollback()
         raise HTTPException(
             status_code=400,
             detail="bot_id and user_id must be valid UUIDs",
         ) from None
     except IntegrityError:
-        chat_db.rollback()
+        await chat_db.rollback()
         raise HTTPException(
             status_code=409,
             detail="Model configuration could not be created because of a database conflict",
         ) from None
     except Exception as error:
-        chat_db.rollback()
+        await chat_db.rollback()
         logger.exception("Unexpected error creating model configuration")
         raise HTTPException(
             status_code=500,

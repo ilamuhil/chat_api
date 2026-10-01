@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -10,7 +9,10 @@ from fastapi import WebSocket
 from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 
-from app.db.session import create_chat_db_session, create_dashboard_db_session
+from app.db.session import (
+    create_async_chat_db_session,
+    create_async_dashboard_db_session,
+)
 from app.domain import ChatSession
 from app.infra.redis_store import get_data, set_data
 from app.models.chat_db_models import (
@@ -55,8 +57,8 @@ async def send_first_message_once(
 
     async with end_user_typing(session):
         try:
-            with create_chat_db_session() as chat_db:
-                existing_message = chat_db.scalar(
+            async with create_async_chat_db_session() as chat_db:
+                existing_message = await chat_db.scalar(
                     select(Messages.id)
                     .where(
                         Messages.conversation_id == conversation_uuid,
@@ -78,7 +80,7 @@ async def send_first_message_once(
                     updated_at=datetime.now(UTC),
                 )
                 chat_db.add(message)
-                chat_db.commit()
+                await chat_db.commit()
         except Exception:
             logger.exception("Error logging first message to database")
             return
@@ -95,21 +97,21 @@ async def send_first_message_once(
         set_data(greeting_key, True, ttl=None)
 
 
-def _sync_associate_lead_with_conversation(
+async def associate_lead_with_conversation(
     conversation_uuid: uuid.UUID,
     lead_id: uuid.UUID,
 ) -> bool:
     try:
-        with create_dashboard_db_session() as dashboard_db:
+        async with create_async_dashboard_db_session() as dashboard_db:
             result = cast(
                 CursorResult[Any],
-                dashboard_db.execute(
+                await dashboard_db.execute(
                     update(ConversationsMeta)
                     .where(ConversationsMeta.id == conversation_uuid)
                     .values(lead_id=lead_id),
                 ),
             )
-            dashboard_db.commit()
+            await dashboard_db.commit()
             return result.rowcount == 1
     except Exception:
         logger.exception(
@@ -119,24 +121,13 @@ def _sync_associate_lead_with_conversation(
         return False
 
 
-async def associate_lead_with_conversation(
-    conversation_uuid: uuid.UUID,
-    lead_id: uuid.UUID,
-) -> bool:
-    return await asyncio.to_thread(
-        _sync_associate_lead_with_conversation,
-        conversation_uuid,
-        lead_id,
-    )
-
-
 async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | None:
     bot_pref_raw = get_data(f"bot:{bot_id}:config")
     if isinstance(bot_pref_raw, dict) and REQUIRED_BOT_PREF_KEYS.issubset(bot_pref_raw):
         return bot_pref_raw
 
-    with create_dashboard_db_session() as dashboard_db:
-        bot = dashboard_db.scalar(select(Bots).where(Bots.id == bot_id))
+    async with create_async_dashboard_db_session() as dashboard_db:
+        bot = await dashboard_db.scalar(select(Bots).where(Bots.id == bot_id))
         if bot is None:
             logger.error("Bot not found", extra={"bot_id": bot_id})
             await websocket.send_json({"type": "error", "message": "Bot Unavailable"})
@@ -159,17 +150,20 @@ async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | 
         }
         logger.info("Bot preferences set", extra={"bot_id": bot_id})
 
-        with create_chat_db_session() as chat_db:
-            embedding_config = chat_db.scalars(
+        async with create_async_chat_db_session() as chat_db:
+            embedding_config = (
+                await chat_db.scalars(
                 select(EmbeddingConfigurations)
                 .where(
                     EmbeddingConfigurations.bot_id == bot_id,
                     EmbeddingConfigurations.state.in_(["active"]),
                 )
                 .order_by(EmbeddingConfigurations.created_at.desc())
+                )
             ).first()
             bot_config = (
-                chat_db.scalars(
+                (
+                    await chat_db.scalars(
                     select(BotConfigurations)
                     .where(
                         BotConfigurations.bot_id == bot_id,
@@ -178,6 +172,7 @@ async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | 
                         BotConfigurations.state.in_(["active"]),
                     )
                     .order_by(BotConfigurations.created_at.desc())
+                    )
                 ).first()
                 if embedding_config is not None
                 else None
@@ -217,13 +212,13 @@ async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | 
     return bot_pref
 
 
-def has_lead(
+async def has_lead(
     visitor_uuid: uuid.UUID,
     bot_id: uuid.UUID,
     organization_id: str,
 ) -> tuple[Literal[True], uuid.UUID] | tuple[Literal[False], None]:
-    with create_dashboard_db_session() as dashboard_db:
-        existing_lead = dashboard_db.scalar(
+    async with create_async_dashboard_db_session() as dashboard_db:
+        existing_lead = await dashboard_db.scalar(
             select(Leads.id)
             .where(
                 Leads.visitor_id == visitor_uuid,
@@ -293,12 +288,12 @@ async def handle_form_capture(
             organization_id=session.organization_id,
             captured_at=datetime.now(UTC),
         )
-        with create_dashboard_db_session() as dashboard_db:
+        async with create_async_dashboard_db_session() as dashboard_db:
             dashboard_db.add(lead)
-            dashboard_db.flush()
+            await dashboard_db.flush()
             result = cast(
                 CursorResult[Any],
-                dashboard_db.execute(
+                await dashboard_db.execute(
                     update(ConversationsMeta)
                     .where(ConversationsMeta.id == conversation_uuid)
                     .values(lead_id=lead_id),
@@ -313,9 +308,9 @@ async def handle_form_capture(
                         "rowcount": result.rowcount,
                     },
                 )
-                dashboard_db.rollback()
+                await dashboard_db.rollback()
                 return True
-            dashboard_db.commit()
+            await dashboard_db.commit()
         logger.info(
             "Form capture data stored in database",
             extra={"conversation_id": session.conversation_id},
@@ -384,8 +379,8 @@ async def end_chat_session(
     await send_typing_to_end_user(session, False)
     await send_typing_to_support_agent(session, False)
     if not already_closed:
-        with create_dashboard_db_session() as dashboard_db:
-            dashboard_db.execute(
+        async with create_async_dashboard_db_session() as dashboard_db:
+            await dashboard_db.execute(
                 update(ConversationsMeta)
                 .where(ConversationsMeta.id == session.conversation_id)
                 .values(

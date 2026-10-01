@@ -149,12 +149,8 @@ class KnowledgeUnit:
         return self.metadata.get("structure", {}).get("content_type")
 
     @property
-    def heading_path(self) -> list[str]:
-        return self.metadata.get("structure", {}).get("heading_path", [])
-
-    @property
-    def section_title(self) -> str | None:
-        return self.heading_path[-1] if self.heading_path else None
+    def heading_paths(self) -> list[str]:
+        return self.metadata.get("structure", {}).get("heading_paths", [])
 
     def _clean_content(self) -> str:
         content = self.CONTROL_CHAR_PATTERN.sub("", self.content)
@@ -492,10 +488,10 @@ class KnowledgeUnit:
             score += 1
 
         # Same structural heading.
-        if unit.heading_path and unit.heading_path == candidate.heading_path:
+        if unit.heading_paths and unit.heading_paths == candidate.heading_paths:
             score += 4
 
-        elif not unit.heading_path or not candidate.heading_path:
+        elif not unit.heading_paths or not candidate.heading_paths:
             score += 1
 
         else:
@@ -561,16 +557,16 @@ class KnowledgeUnit:
         left_structure = left.metadata.get("structure", {})
         right_structure = right.metadata.get("structure", {})
 
-        if left.heading_path and left.heading_path == right.heading_path:
-            heading_path = left.heading_path
-        elif not left.heading_path:
-            heading_path = right.heading_path
+        if left.heading_paths and left.heading_paths == right.heading_paths:
+            heading_paths = left.heading_paths
+        elif not left.heading_paths:
+            heading_paths = right.heading_paths
         else:
-            heading_path = left.heading_path
+            heading_paths = left.heading_paths
 
         structure = {
             **left_structure,
-            "heading_path": heading_path,
+            "heading_paths": heading_paths,
             "source_items": (
                 left_structure.get("source_items", [])
                 + right_structure.get("source_items", [])

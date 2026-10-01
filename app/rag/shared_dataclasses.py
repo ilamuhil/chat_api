@@ -6,12 +6,27 @@ from pydantic import BaseModel, Field
 
 
 class RetrievalResultStatus(StrEnum):
+    """Status of the retrieval pipeline result.
+
+    Members:
+        READY: Retrieval completed with usable evidence.
+        NEEDS_CLARIFICATION: The user query needs clarification.
+        NO_EVIDENCE: Retrieval found no suitable evidence.
+    """
+
     READY = "ready"
     NEEDS_CLARIFICATION = "needs_clarification"
     NO_EVIDENCE = "no_evidence"
 
 
 class ConversationTurn(BaseModel):
+    """One message in the scoped conversation history.
+
+    Attributes:
+        role: Whether the message came from the user or the assistant.
+        content: Text content of the conversation message.
+    """
+
     role: Literal["user", "assistant"] = Field(
         ..., description="The role of the conversation turn."
     )
@@ -19,6 +34,16 @@ class ConversationTurn(BaseModel):
 
 
 class SourceReference(BaseModel):
+    """Citation information for a retrieved source.
+
+    Attributes:
+        source_id: Identifier of the training source.
+        document_id: Identifier of the indexed document.
+        label: Human-readable source label.
+        page: Optional page number containing the evidence.
+        url: Optional URL containing the evidence.
+    """
+
     source_id: UUID = Field(..., description="The id of the source of the document.")
     document_id: UUID = Field(..., description="The id of the document.")
     label: str = Field(..., description="The label of the source reference.")
@@ -31,6 +56,14 @@ class SourceReference(BaseModel):
 
 
 class PreparedQuery(BaseModel):
+    """Original and normalized forms of a user query.
+
+    Attributes:
+        original_message: The original message received from the user.
+        standalone_query: Query rewritten to be understandable without history.
+        did_rewrite: Whether the standalone query differs due to rewriting.
+    """
+
     original_message: str = Field(
         ..., description="The original message from the user."
     )
@@ -43,6 +76,17 @@ class PreparedQuery(BaseModel):
 
 
 class RetrievalRequest(BaseModel):
+    """Input required to perform retrieval for a user message.
+
+    Attributes:
+        original_message: The original message received from the user.
+        organization_id: Identifier of the user's organization.
+        bot_id: Identifier of the bot being queried.
+        embedding_configuration_id: Embedding configuration used for retrieval.
+        scoped_conversation_history: Conversation history available to the query
+            preparer.
+    """
+
     original_message: str = Field(
         ..., description="The original message from the user."
     )
@@ -63,13 +107,23 @@ class RetrievalRequest(BaseModel):
 
 
 class RetrievalCandidate(BaseModel):
+    """A document candidate returned by keyword or semantic retrieval.
+
+    Attributes:
+        document_id: Identifier of the indexed document.
+        source_id: Identifier of the source that produced the document.
+        content: Text content used as retrieval evidence.
+        metadata: Additional source and document metadata.
+        keyword_score: Keyword-search score, when available.
+        semantic_score: Semantic-similarity score, when available.
+        keyword_rank: Rank from keyword retrieval, when available.
+        semantic_rank: Rank from semantic retrieval, when available.
+    """
+
     document_id: UUID = Field(
         ..., description="The id of the document to be retrieved."
     )
     source_id: UUID = Field(..., description="The id of the source of the document.")
-    section_title: str = Field(
-        ..., description="The title of the section of the document to be retrieved."
-    )
     content: str = Field(
         ..., description="The content of the document to be retrieved."
     )
@@ -94,6 +148,16 @@ class RetrievalCandidate(BaseModel):
 
 
 class RankedCandidate(BaseModel):
+    """Retrieval candidate after rank fusion and optional reranking.
+
+    Attributes:
+        rrf_score: Reciprocal Rank Fusion score.
+        rrf_rank: Rank assigned by Reciprocal Rank Fusion.
+        candidate: Original retrieval candidate.
+        reranker_score: Optional score from a reranking model.
+        final_rank: Final rank after all ranking stages.
+    """
+
     rrf_score: float = Field(..., description="The RRF score of the document.")
     rrf_rank: int | None = Field(
         default=None, description="The rank of the document based on the RRF score."
@@ -109,6 +173,16 @@ class RankedCandidate(BaseModel):
 
 
 class ContextBundle(BaseModel):
+    """Evidence selected and formatted for the answer-generation model.
+
+    Attributes:
+        assembled_context: Final text context supplied to the language model.
+        selected_candidates: Ranked candidates included in the context.
+        source_references: Citations corresponding to the selected evidence.
+        token_count: Number of tokens in the assembled context.
+        evidence_notes: Notes explaining evidence selection or limitations.
+    """
+
     assembled_context: str = Field(
         ..., description="The assembled context of the document."
     )
@@ -127,6 +201,16 @@ class ContextBundle(BaseModel):
 
 
 class RetrievalResult(BaseModel):
+    """Complete result returned by the retrieval pipeline.
+
+    Attributes:
+        status: Overall retrieval outcome.
+        prepared_query: Original and standalone query forms.
+        context_bundle: Selected evidence, if evidence was found.
+        diagnostics: Operational and ranking details for debugging.
+        clarification_question: Question to ask when clarification is needed.
+    """
+
     status: RetrievalResultStatus = Field(
         ..., description="The status of the retrieval result."
     )

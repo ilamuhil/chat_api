@@ -11,9 +11,9 @@ from redis.exceptions import RedisError
 from rq import Queue
 from sqlalchemy import desc, select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_chat_db, get_dashboard_db
+from app.db.session import get_async_chat_db, get_async_dashboard_db
 from app.infra.redis_client import redis_client
 from app.models.chat_db_models import (
     BotConfigurations,
@@ -31,8 +31,8 @@ router = APIRouter()
 @router.post("/training/queue")
 async def queue_training(
     request: Request,
-    dashboard_db: Annotated[Session, Depends(get_dashboard_db)],
-    chat_db: Annotated[Session, Depends(get_chat_db)],
+    dashboard_db: Annotated[AsyncSession, Depends(get_async_dashboard_db)],
+    chat_db: Annotated[AsyncSession, Depends(get_async_chat_db)],
 ):
     claims = request.state.claims
     organization_id = claims.get("organization_id")
@@ -50,7 +50,7 @@ async def queue_training(
         return JSONResponse({"error": "Invalid bot ID"}, status_code=400)
 
     # ---- Concurrency guard (Python-side authority) ----
-    existing_job = chat_db.scalars(
+    existing_job = await chat_db.scalars(
         select(TrainingJobs).where(
             TrainingJobs.bot_id == bot_uuid,
             TrainingJobs.status.in_(["queued", "processing"]),
@@ -63,7 +63,7 @@ async def queue_training(
             status_code=409,
         )
 
-    embedding_config = chat_db.scalars(
+    embedding_config = await chat_db.scalars(
         select(EmbeddingConfigurations)
         .where(
             EmbeddingConfigurations.bot_id == bot_uuid,
@@ -72,7 +72,7 @@ async def queue_training(
         .order_by(desc(EmbeddingConfigurations.created_at))
     ).first()
     if embedding_config is None:
-        embedding_config = chat_db.scalars(
+        embedding_config = await chat_db.scalars(
             select(EmbeddingConfigurations)
             .where(
                 EmbeddingConfigurations.bot_id == bot_uuid,
@@ -83,7 +83,7 @@ async def queue_training(
 
     bot_config = None
     if embedding_config is not None:
-        bot_config = chat_db.scalars(
+        bot_config = await chat_db.scalars(
             select(BotConfigurations)
             .where(
                 BotConfigurations.bot_id == bot_uuid,
@@ -103,7 +103,7 @@ async def queue_training(
     # TODO: Once the happy flow is complete, findout the places where failure is non retryable and then add those as Statuses where we skip fetching the sources for training
 
     # Fetch training sources
-    sources = dashboard_db.scalars(
+    sources = await dashboard_db.scalars(
         select(TrainingSources).where(
             TrainingSources.bot_id == bot_uuid,
             TrainingSources.organization_id == organization_id,
@@ -132,8 +132,8 @@ async def queue_training(
     # ---- Enqueue Redis job ----
     try:
         chat_db.add(job)
-        chat_db.commit()
-        chat_db.refresh(job)
+        await chat_db.commit()
+        await chat_db.refresh(job)
         queue = Queue(connection=redis_client)
         queue.enqueue(
             process_training_job,
@@ -144,7 +144,7 @@ async def queue_training(
         )
         for source in sources:
             source.status = "queued_for_training"
-        dashboard_db.commit()
+        await dashboard_db.commit()
         return JSONResponse(
             content={
                 "message": "Training queued",
@@ -162,8 +162,8 @@ async def queue_training(
             job.status = "failed"
             job.error_message = str(e)
             job.completed_at = datetime.now(UTC)
-            chat_db.commit()
-            dashboard_db.rollback()
+            await chat_db.commit()
+            await dashboard_db.rollback()
             logger.info(f"Job status updated to failed: {job.id}")
             return JSONResponse(
                 content={"message": "An error occurred while training the sources"},
@@ -174,15 +174,15 @@ async def queue_training(
                 "Failed to update job status as failed",
                 extra={"job_id": str(job.id), "error": str(e)},
             )
-            chat_db.rollback()
-            dashboard_db.rollback()
+            await chat_db.rollback()
+            await dashboard_db.rollback()
             return JSONResponse(content={"Internal Server Error"}, status_code=500)
 
 
 @router.delete("/api/training/delete/{source_id}")
 async def delete_training_source(
     request: Request,
-    chat_db: Annotated[Session, Depends(get_chat_db)],
+    chat_db: Annotated[AsyncSession, Depends(get_async_chat_db)],
 ):
     claims: dict = request.state.claims
     source_id: str = request.path_params.get("source_id") or ""
@@ -200,7 +200,7 @@ async def delete_training_source(
                 content={"error": "Invalid Bot selected"}, status_code=400
             )
 
-        embedding_config = chat_db.scalars(
+        embedding_config = await chat_db.scalars(
             select(EmbeddingConfigurations)
             .where(
                 EmbeddingConfigurations.bot_id == bot_uuid,
@@ -210,7 +210,7 @@ async def delete_training_source(
         ).first()
         bot_config = None
         if embedding_config is not None:
-            bot_config = chat_db.scalars(
+            bot_config = await chat_db.scalars(
                 select(BotConfigurations).where(
                     BotConfigurations.bot_id == bot_uuid,
                     BotConfigurations.embedding_configuration_id == embedding_config.id,
@@ -239,11 +239,11 @@ async def delete_training_source(
             bot_configuration_id=bot_config.id,
         )
         chat_db.add(job)
-        chat_db.commit()
+        await chat_db.commit()
         logger.info(
             "Deletion job record added to database", extra={"job_id": str(job.id)}
         )
-        chat_db.refresh(job)
+        await chat_db.refresh(job)
     except (SQLAlchemyError, RedisError, ValueError, TypeError) as e:
         logger.exception(
             "Failed to queue deletion workflow job", extra={"error": str(e)}
@@ -252,7 +252,7 @@ async def delete_training_source(
             job.status = "failed"
             job.error_message = str(e)
             job.completed_at = datetime.now(UTC)
-            chat_db.commit()
+            await chat_db.commit()
             logger.error(
                 "Could not add job record to database", extra={"error": str(e)}
             )
@@ -263,7 +263,7 @@ async def delete_training_source(
             logger.exception(
                 "Failed to update job status as failed", extra={"error": str(err)}
             )
-            chat_db.rollback()
+            await chat_db.rollback()
             return JSONResponse(
                 content={"message": "Source was deleted successfully"}, status_code=200
             )

@@ -9,7 +9,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.db.session import create_dashboard_db_session
+from app.db.session import create_async_dashboard_db_session
 from app.infra.redis_client import redis_client
 from app.models.dashboard_db_models import (
     Notifications,
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 NotificationPayload = dict[str, Any]
 
 
-def _create_notification_rows_sync(
+async def create_notifications(
     *,
     organization_id: str,
     notification_type: str,
@@ -31,11 +31,13 @@ def _create_notification_rows_sync(
 ) -> list[NotificationPayload]:
     now = datetime.datetime.now(datetime.UTC)
 
-    with create_dashboard_db_session() as session:
-        recipient_ids = session.scalars(
+    async with create_async_dashboard_db_session() as session:
+        recipient_ids = (
+            await session.scalars(
             select(OrganizationMembers.user_id).where(
                 OrganizationMembers.organization_id == organization_id,
                 OrganizationMembers.user_id.is_not(None),
+            )
             )
         ).all()
 
@@ -87,27 +89,9 @@ def _create_notification_rows_sync(
             )
 
         session.add_all(rows)
-        session.commit()
+        await session.commit()
 
         return payloads
-
-
-async def create_notifications(
-    *,
-    organization_id: str,
-    notification_type: str,
-    title: str,
-    body: str,
-    metadata: dict[str, Any],
-) -> list[NotificationPayload]:
-    return await asyncio.to_thread(
-        _create_notification_rows_sync,
-        organization_id=organization_id,
-        notification_type=notification_type,
-        title=title,
-        body=body,
-        metadata=metadata,
-    )
 
 
 def _publish_notifications_sync(

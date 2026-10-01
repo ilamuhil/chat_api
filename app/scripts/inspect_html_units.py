@@ -30,7 +30,7 @@ def format_unit(unit: KnowledgeUnit, *, number: int, total: int) -> str:
             f"Source order: {unit.source_order}",
             f"Content type: {unit.content_type}",
             f"Page: {unit.metadata.get('source', {}).get('page', '(none)')}",
-            f"Heading path: {' > '.join(unit.heading_path) or '(none)'}",
+            f"Heading paths: {' > '.join(unit.heading_paths) or '(none)'}",
             "-" * 88,
             "CONTENT\n",
             unit.content,

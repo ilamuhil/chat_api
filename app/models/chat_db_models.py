@@ -9,6 +9,7 @@ from sqlalchemy import (
     ARRAY,
     Boolean,
     CheckConstraint,
+    Computed,
     DateTime,
     Double,
     ForeignKeyConstraint,
@@ -21,7 +22,7 @@ from sqlalchemy import (
     Uuid,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 # Chat database maintained by the python chat server.
@@ -51,6 +52,11 @@ class Documents(Base):
             "documents_source_idx",
             "source_id",
         ),
+        Index(
+            "ix_documents_search_vector",
+            "search_vector",
+            postgresql_using="gin",
+        ),
     )
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, server_default=text("gen_random_uuid()")
@@ -63,7 +69,6 @@ class Documents(Base):
     created_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(True), server_default=text("now()")
     )
-    section_title: Mapped[str | None] = mapped_column(Text)
     token_count: Mapped[int | None] = mapped_column(Integer)
     is_active: Mapped[bool | None] = mapped_column(Boolean, server_default=text("true"))
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
@@ -72,10 +77,34 @@ class Documents(Base):
         "Embeddings", back_populates="document", uselist=False
     )
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed(
+            """
+            setweight(
+                to_tsvector(
+                    'english',
+                    coalesce(
+                        metadata_json -> 'structure' ->> 'heading_paths',
+                        ''
+                    )
+                ),
+                'A'
+            )
+            ||
+            setweight(
+                to_tsvector('english', coalesce(content, '')),
+                'D'
+            )
+            """,
+            persisted=True,
+        ),
+        nullable=True,
+    )
     # * Metadata structure will be the same as that of knowledge units generated from the data transformation pipeline
-    # * table : {source:{page:int},structure:{content_type:"table",heading_path:[str],domain:{}}
-    # * csv : {source:{row:int},structure:{content_type:"row",heading_path:[str],domain:{}}
-    # * html : {source:{url:str},structure:{content_type:"html",heading_path:[str],domain:{}}
+    # * table : {source:{page:int},structure:{content_type:"table",heading_paths:[str],domain:{}}
+    # * csv : {source:{row:int},structure:{content_type:"row",heading_paths:[str],domain:{}}
+    # * html : {source:{url:str},structure:{content_type:"html",heading_paths:[str],domain:{}}
 
 
 class Messages(Base):

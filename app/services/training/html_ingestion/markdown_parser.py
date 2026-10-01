@@ -146,7 +146,7 @@ class MarkdownUnitParser:
             metadata={
                 "source": page_meta.copy(),
                 "structure": {
-                    "heading_path": heading_path.copy(),
+                    "heading_paths": heading_path.copy(),
                     "content_type": content_type,
                     **metadata,
                 },

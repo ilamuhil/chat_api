@@ -5,9 +5,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_chat_db
+from app.db.session import get_async_chat_db
 from app.models.chat_db_models import Messages
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ router = APIRouter()
 @router.get("/conversations/{conversation_id}/messages")
 async def get_messages(
     conversation_id: str,
-    db: Annotated[Session, Depends(get_chat_db)],
+    db: Annotated[AsyncSession, Depends(get_async_chat_db)],
 ):
     """Given the conversation id return all the messages in the conversation from the messages table"""
 
@@ -32,7 +32,7 @@ async def get_messages(
             )
         conversation_uuid = uuid.UUID(conversation_id)
 
-        results = db.execute(
+        results = await db.execute(
             select(
                 Messages.id,
                 Messages.conversation_id,

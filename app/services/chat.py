@@ -14,9 +14,12 @@ from langchain_core.runnables import RunnableConfig
 from sqlalchemy import update
 
 from app.core.env import load_app_env
-from app.db.session import create_chat_db_session, create_dashboard_db_session
+from app.db.session import (
+    create_async_chat_db_session,
+    create_async_dashboard_db_session,
+)
 from app.domain import ChatSession, InstituteContext
-from app.helpers.rag import embed_query, retrieve_closest_embeddings
+from app.helpers.rag import embed_query, retrieve_closest_embeddings_async
 from app.infra.redis_store import set_data
 from app.models.chat_db_models import Documents, Embeddings, Messages, RetrievalLogs
 from app.models.dashboard_db_models import ConversationsMeta
@@ -84,16 +87,16 @@ async def end_user_typing(session: ChatSession) -> AsyncIterator[None]:
         await send_typing_to_end_user(session, False)
 
 
-def _persist_message(
+async def _persist_message(
     conversation_id: str,
     role: MessageRole,
     content: str,
     content_type: ContentType,
 ) -> None:
     now = datetime.now(UTC)
-    with (
-        create_chat_db_session() as chat_db,
-        create_dashboard_db_session() as dashboard_db,
+    async with (
+        create_async_chat_db_session() as chat_db,
+        create_async_dashboard_db_session() as dashboard_db,
     ):
         chat_db.add(
             Messages(
@@ -114,9 +117,9 @@ def _persist_message(
                 last_message_at=now,
             )
         )
-        dashboard_db.execute(stmnt)
-        chat_db.commit()
-        dashboard_db.commit()
+        await dashboard_db.execute(stmnt)
+        await chat_db.commit()
+        await dashboard_db.commit()
 
     # Redis stores JSON, so convert the datetime to an ISO-8601 string.
     if content_type == "text":
@@ -142,8 +145,7 @@ async def log_message(
     content_type: ContentType = "text",
 ) -> None:
     try:
-        await asyncio.to_thread(
-            _persist_message,
+        await _persist_message(
             conversation_id,
             role,
             content,
@@ -161,7 +163,7 @@ async def log_message(
         )
 
 
-def _persist_retrieval_log(
+async def _persist_retrieval_log(
     *,
     organization_id: str,
     bot_id: uuid.UUID,
@@ -178,7 +180,7 @@ def _persist_retrieval_log(
     document_ids = [document.id for _, document, _ in rows]
     # pgvector cosine_distance is 1 - cosine_similarity for normalized vectors.
     similarity_scores = [1.0 - distance for _, _, distance in rows]
-    with create_chat_db_session() as chat_db:
+    async with create_async_chat_db_session() as chat_db:
         chat_db.add(
             RetrievalLogs(
                 id=uuid.uuid4(),
@@ -197,7 +199,7 @@ def _persist_retrieval_log(
                 reranked_document_ids=None,
             )
         )
-        chat_db.commit()
+        await chat_db.commit()
 
 
 async def log_retrieval(
@@ -215,8 +217,7 @@ async def log_retrieval(
     reranker_used: bool = False,
 ) -> None:
     try:
-        await asyncio.to_thread(
-            _persist_retrieval_log,
+        await _persist_retrieval_log(
             organization_id=organization_id,
             bot_id=bot_id,
             conversation_id=conversation_id,
@@ -322,8 +323,8 @@ async def respond_with_ai(
                 else None
             )
 
-            with create_chat_db_session() as chat_db:
-                rows = retrieve_closest_embeddings(
+            async with create_async_chat_db_session() as chat_db:
+                rows = await retrieve_closest_embeddings_async(
                     chat_db,
                     query_vector,
                     bot_id,

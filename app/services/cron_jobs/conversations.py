@@ -7,7 +7,7 @@ from sqlalchemy import update
 
 from app.config.logging_config import setup_logging
 from app.core.env import load_app_env
-from app.db.session import DashboardDbSessionLocal
+from app.db.session import create_async_dashboard_db_session
 from app.models.dashboard_db_models import ConversationsMeta
 
 load_app_env()
@@ -20,7 +20,7 @@ async def close_stale_conversations() -> None:
     # conversations older than 15 min are closed by system
     cutoff_time = datetime.now(UTC) - timedelta(minutes=15)
     try:
-        with DashboardDbSessionLocal() as db:
+        async with create_async_dashboard_db_session() as db:
             # update all conversations with the status open and last_message_at more than 30 min and handover_status not in requested
             update_stmnt = (
                 update(ConversationsMeta)
@@ -33,8 +33,8 @@ async def close_stale_conversations() -> None:
                     status="closed", closed_by="system", closed_at=datetime.now(UTC)
                 )
             )
-            db.execute(update_stmnt)
-            db.commit()
+            await db.execute(update_stmnt)
+            await db.commit()
             logger.info("Stale conversations closed by system")
     except Exception as e:
         logger.exception(

@@ -5,6 +5,7 @@ from uuid import UUID
 import tiktoken
 from langchain_openai import OpenAIEmbeddings
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.models.chat_db_models import Documents, Embeddings
@@ -56,23 +57,19 @@ def create_embeddings(
         raise ValueError("Failed to create embeddings. Please retry.") from error
 
 
-def retrieve_closest_embeddings(
-    chat_session: Session,
+async def retrieve_closest_embeddings_async(
+    chat_session: AsyncSession,
     query: list[float],
     bot_id: UUID,
     embedding_configuration_id: UUID,
     k: int = 5,
     threshold: float = 0.5,
 ) -> list[tuple[Embeddings, Documents, float]]:
-    """Return (embedding, document, cosine_distance) rows for the closest matches.
-
-    ``threshold`` is a minimum cosine similarity in ``[0, 1]``. Rows are kept
-    when ``1 - cosine_distance >= threshold``.
-    """
+    """Return the closest embeddings using a non-blocking database query."""
     try:
         distance = Embeddings.embedding.cosine_distance(query)
         max_distance = max(0.0, min(1.0, 1.0 - threshold))
-        stmnt = (
+        statement = (
             select(Embeddings, Documents, distance)
             .join(Documents, Embeddings.document_id == Documents.id)
             .where(
@@ -85,13 +82,15 @@ def retrieve_closest_embeddings(
             .order_by(distance, Documents.chunk_index)
             .limit(k)
         )
-        rows = chat_session.execute(stmnt).all()
+        result = await chat_session.execute(statement)
         return [
-            (embedding, document, float(dist)) for embedding, document, dist in rows
+            (embedding, document, float(dist))
+            for embedding, document, dist in result.all()
         ]
     except Exception as error:
         logger.exception(
-            "Failed to retrieve closest embeddings", extra={"error": str(error)}
+            "Failed to retrieve closest embeddings",
+            extra={"error": str(error)},
         )
         raise ValueError(
             "Failed to retrieve closest embeddings. Please retry."

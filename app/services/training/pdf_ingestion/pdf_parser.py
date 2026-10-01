@@ -160,7 +160,7 @@ class PdfParser:
         types = {item["content_type"] for item in items}
 
         structure = {
-            "heading_path": list(chunk.meta.headings or []),
+            "heading_paths": list(chunk.meta.headings or []),
             "content_type": "mixed"
             if len(types) > 1
             else next(iter(types))
