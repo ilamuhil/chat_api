@@ -191,6 +191,8 @@ class PdfParser:
                     "provenance": provenance_data,
                 },
                 "structure": structure,
+                # Keep token accounting consistent with HTML and CSV units.
+                "token_count": self.tokenizer.count_tokens(content),
             },
         )
 

@@ -22,6 +22,7 @@ class HybridRetriever(BaseModel):
         query: str,
         request: RetrievalRequest,
         chat_session: AsyncSession,
+        retrieval_k: int = 10,
     ) -> list[RetrievalCandidate]:
         """Return active documents matching PostgreSQL full-text search terms."""
         if not query.strip():
@@ -44,7 +45,7 @@ class HybridRetriever(BaseModel):
                 Documents.search_vector.op("@@")(search_query),
             )
             .order_by(keyword_score.desc(), Documents.chunk_index)
-            .limit(10)
+            .limit(retrieval_k)
         )
 
         try:
@@ -75,59 +76,44 @@ class HybridRetriever(BaseModel):
             raise ValueError("Failed to embed query. Please retry.") from error
 
     async def _semantic_search(
-        self, query: str, request: RetrievalRequest, chat_session: AsyncSession
-    ) -> list[RetrievalCandidate]:
-        """Return active documents matching semantic similarity."""
+    self,
+    query: str,
+    request: RetrievalRequest,
+    chat_session: AsyncSession,
+    limit: int,
+    *,
+    embedding_configuration: EmbeddingConfigurations,
+    similarity_threshold: float,
+) -> list[RetrievalCandidate]:
+        """Return active documents ranked by semantic similarity."""
         if not query.strip():
             return []
 
-        statement = (
-            select(EmbeddingConfigurations, BotConfigurations)
-            .join(
-                BotConfigurations,
-                and_(
-                    BotConfigurations.bot_id == EmbeddingConfigurations.bot_id,
-                    BotConfigurations.embedding_configuration_id
-                    == EmbeddingConfigurations.id,
-                ),
-            )
-            .where(
-                EmbeddingConfigurations.bot_id == request.bot_id,
-                EmbeddingConfigurations.state == "active",
-                BotConfigurations.state == "active",
-            )
-            .order_by(
-                BotConfigurations.updated_at.desc().nullslast(),
-                BotConfigurations.created_at.desc().nullslast(),
-                EmbeddingConfigurations.updated_at.desc().nullslast(),
-                EmbeddingConfigurations.created_at.desc().nullslast(),
-            )
-            .limit(1)
+        if limit <= 0:
+            raise ValueError("Search limit must be positive.")
+
+        if (
+            embedding_configuration.id != request.embedding_configuration_id
+            or embedding_configuration.bot_id != request.bot_id
+            or embedding_configuration.state != "active"
+        ):
+            raise ValueError("Invalid or inactive embedding configuration.")
+
+        if not 0.0 <= similarity_threshold <= 1.0:
+            raise ValueError("Similarity threshold must be between 0 and 1.")
+
+        query_embedding = await self.embed_query(
+            query,
+            embedding_configuration.model,
+            embedding_configuration.dimension,
         )
-        try:
-            result = await chat_session.execute(statement)
-            config_pair = result.one_or_none()
-        except Exception as error:
-            logger.exception(
-                "Error loading active retrieval configurations",
-                extra={"bot_id": str(request.bot_id)},
-            )
-            raise ValueError("Retrieval configuration lookup failed.") from error
 
-        if config_pair is None:
-            raise ValueError("No active embedding and bot configuration pair found.")
-
-        embedding_configuration, bot_configuration = config_pair
-        model = embedding_configuration.model
-        dimensions = embedding_configuration.dimension
-        similarity_threshold = bot_configuration.similarity_threshold
-
-        query_embedding = await self.embed_query(query, model, dimensions)
-        max_distance = max(0.0, min(1.0, 1.0 - similarity_threshold))
         distance = Embeddings.embedding.cosine_distance(query_embedding)
+        max_distance = 1.0 - similarity_threshold
+
         statement = (
-            select(Embeddings, Documents, distance)
-            .join(Documents, Embeddings.document_id == Documents.id)
+            select(Documents, distance.label("distance"))
+            .join(Embeddings, Embeddings.document_id == Documents.id)
             .where(
                 Documents.organization_id == request.organization_id,
                 Documents.bot_id == request.bot_id,
@@ -138,8 +124,9 @@ class HybridRetriever(BaseModel):
                 distance <= max_distance,
             )
             .order_by(distance, Documents.chunk_index)
-            .limit(10)
+            .limit(limit)
         )
+
         try:
             result = await chat_session.execute(statement)
             rows = result.all()
@@ -159,5 +146,5 @@ class HybridRetriever(BaseModel):
                 semantic_score=1.0 - float(distance_value),
                 semantic_rank=rank,
             )
-            for rank, (_, document, distance_value) in enumerate(rows, start=1)
+            for rank, (document, distance_value) in enumerate(rows, start=1)
         ]

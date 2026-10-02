@@ -4,12 +4,14 @@ from typing import Any, ClassVar
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
+from app.helpers.rag import count_tokens
 from app.services.training.knowledge_unit import KnowledgeUnit, SourceType
 
 
 @dataclass
 class MarkdownUnitParser:
     LIST_OPEN_TYPES: ClassVar[set[str]] = {"bullet_list_open", "ordered_list_open"}
+    embedding_model: str
 
     markdown_parser: MarkdownIt = field(
         default_factory=lambda: MarkdownIt("commonmark", {"html": False}).enable(
@@ -150,6 +152,8 @@ class MarkdownUnitParser:
                     "content_type": content_type,
                     **metadata,
                 },
+                # Keep token accounting consistent across ingestion formats.
+                "token_count": count_tokens(content, self.embedding_model),
             },
             source_order=source_order,
         )
@@ -283,8 +287,14 @@ class MarkdownUnitParser:
         return index + 3, unit
 
     def parse(
-        self, markdown: str, page_meta: dict[str, str | None], source_type: SourceType
+        self,
+        markdown: str,
+        page_meta: dict[str, str | None],
+        source_type: SourceType,
+        source_filename: str | None = None,
     ) -> list[KnowledgeUnit]:
+        if source_filename is not None:
+            page_meta = {**page_meta, "filename": source_filename}
         tokens = self.markdown_parser.parse(markdown)
         units: list[KnowledgeUnit] = []
         headings: dict[int, str] = {}

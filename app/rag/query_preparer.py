@@ -23,7 +23,7 @@ class QueryPreparer(BaseModel):
         ..., description="The maximum number of tokens in the query."
     )
 
-    def prepare(self, request: RetrievalRequest) -> PreparedQuery:
+    async def prepare(self, request: RetrievalRequest) -> PreparedQuery:
         try:
             history = self._select_history(request.scoped_conversation_history)
             if not history:
@@ -33,7 +33,7 @@ class QueryPreparer(BaseModel):
                     standalone_query=request.original_message,
                     did_rewrite=False,
                 )
-            rewritten_query = self._rewrite(history, request.original_message)
+            rewritten_query = await self._rewrite(history, request.original_message)
             return PreparedQuery(
                 original_message=request.original_message,
                 standalone_query=rewritten_query,
@@ -68,12 +68,12 @@ class QueryPreparer(BaseModel):
 
         return list(reversed(bounded_history))
 
-    def _rewrite(self, history: list[ConversationTurn], original_message: str) -> str:
+    async def _rewrite(self, history: list[ConversationTurn], original_message: str) -> str:
         rewriter = ChatOpenAI(
             model=self.rewrite_model, max_completion_tokens=self.max_query_tokens
         )
         history_text = "\n".join(f"{turn.role}: {turn.content}" for turn in history)
-        response = rewriter.invoke(
+        response = await rewriter.ainvoke(
             [
                 SystemMessage(content=self.rewrite_prompt),
                 HumanMessage(

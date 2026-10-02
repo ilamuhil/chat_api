@@ -143,6 +143,11 @@ class CsvPipeline:
                     )
                 )
 
+        # CSV sources have no page metadata; retain the original filename for
+        # source attribution alongside the table structure metadata.
+        for unit in units:
+            unit.metadata["source"] = {"filename": csv_path.name}
+
         return units
 
     def _validate_headers(
