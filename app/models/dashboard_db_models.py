@@ -23,15 +23,21 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
+    """Declarative base for Dashboard DB ORM models."""
+
     pass
 
 
 class OtpType(StrEnum):
+    """Allowed delivery channels for one-time passwords."""
+
     EMAIL = "EMAIL"
     MOBILE = "MOBILE"
 
 
 class OtpPurpose(StrEnum):
+    """Reason a one-time password was issued."""
+
     LOGIN = "LOGIN"
     VERIFY_EMAIL = "VERIFY_EMAIL"
     VERIFY_PHONE = "VERIFY_PHONE"
@@ -39,6 +45,29 @@ class OtpPurpose(StrEnum):
 
 
 class Organizations(Base):
+    """Organization and tenant record.
+
+    Attributes:
+        id: Organization identifier.
+        created_at: Creation timestamp.
+        is_email_verified: Whether the organization email is verified.
+        name: Display name.
+        logo_url: Organization logo URL.
+        address: Structured address data.
+        email: Organization email.
+        phone: Organization phone number.
+        email_token: Email-verification token.
+        bots: Organization bots.
+        organization_members: Organization membership records.
+        invites: Pending organization invitations.
+        magic_links: Organization-scoped magic links.
+        api_keys: Organization API keys.
+        files: Organization files.
+        training_sources: Organization training sources.
+        conversations_meta: Organization conversations.
+        leads: Organization leads.
+    """
+
     __tablename__ = "organizations"
     __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
@@ -80,6 +109,36 @@ class Organizations(Base):
 
 
 class Bots(Base):
+    """Bot configuration and organization-facing profile.
+
+    Attributes:
+        id: Bot identifier.
+        created_at: Creation timestamp.
+        name: Bot display name.
+        institute_name: Institution name shown by the bot.
+        capture_leads: Whether lead capture is enabled.
+        updated_at: Last update timestamp.
+        organization_id: Owning organization identifier.
+        tone: Response tone.
+        role: Bot role.
+        business_description: Institution description.
+        first_message: Initial greeting.
+        confirmation_message: Lead confirmation message.
+        lead_capture_message: Lead-capture prompt.
+        lead_capture_timing: When lead capture occurs.
+        capture_name: Whether to capture names.
+        capture_email: Whether to capture email addresses.
+        capture_phone: Whether to capture phone numbers.
+        deleted_at: Soft-deletion timestamp.
+        deleted_by: Identifier of the deleter or system marker.
+        organization: Owning organization.
+        api_keys: Bot API keys.
+        files: Bot files.
+        training_sources: Bot training sources.
+        conversations_meta: Bot conversations.
+        leads: Bot leads.
+    """
+
     __tablename__ = "bots"
     __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
@@ -137,6 +196,38 @@ class Bots(Base):
 
 
 class Users(Base):
+    """Dashboard user and authentication profile.
+
+    Attributes:
+        id: User identifier.
+        created_at: Creation timestamp.
+        updated_at: Last update timestamp.
+        email: Primary email address.
+        email_verified: Whether the email is verified.
+        email_verified_at: Email verification timestamp.
+        password_hash: Hashed password.
+        phone: Phone number.
+        phone_verified: Whether the phone is verified.
+        phone_verified_at: Phone verification timestamp.
+        full_name: User's full name.
+        avatar_url: Avatar URL.
+        google_id: Google account identifier.
+        github_id: GitHub account identifier.
+        microsoft_id: Microsoft account identifier.
+        google_email: Google account email.
+        github_email: GitHub account email.
+        microsoft_email: Microsoft account email.
+        last_logged_in: Last login timestamp.
+        last_logged_in_ip: Last login IP address.
+        is_active: Whether the account is active.
+        is_banned: Whether the account is banned.
+        banned_until: Ban expiration timestamp.
+        onboarding_completed: Whether onboarding is complete.
+        organization_members: Organization memberships.
+        otps: One-time passwords issued to the user.
+        magic_links: Magic links issued to the user.
+    """
+
     __tablename__ = "users"
     __table_args__ = (
         Index("users_email_idx", "email"),
@@ -206,6 +297,20 @@ class Users(Base):
 
 
 class MagicLinks(Base):
+    """Single-use authentication link.
+
+    Attributes:
+        id: Magic-link identifier.
+        created_at: Creation timestamp.
+        user_id: Target user identifier.
+        organization_id: Optional organization scope.
+        token_hash: Hashed link token.
+        expires_at: Expiration timestamp.
+        used_at: Consumption timestamp.
+        user: Target user.
+        organization: Optional organization scope.
+    """
+
     __tablename__ = "magic_links"
     __table_args__ = (
         Index("magic_links_user_id_idx", "user_id"),
@@ -240,6 +345,18 @@ class MagicLinks(Base):
 
 
 class OrganizationMembers(Base):
+    """Membership connecting a user to an organization.
+
+    Attributes:
+        id: Membership identifier.
+        created_at: Creation timestamp.
+        organization_id: Organization identifier.
+        role: Organization role.
+        user_id: User identifier.
+        organization: Related organization.
+        user: Related user.
+    """
+
     __tablename__ = "organization_members"
     __table_args__ = (
         Index("organization_members_user_id_idx", "user_id"),
@@ -272,6 +389,18 @@ class OrganizationMembers(Base):
 
 
 class OrganizationInvites(Base):
+    """Invitation for a user to join an organization.
+
+    Attributes:
+        id: Invitation identifier.
+        organization_id: Organization identifier.
+        email: Invited email address.
+        role: Role granted when accepted.
+        created_at: Creation timestamp.
+        accepted_at: Acceptance timestamp.
+        organization: Related organization.
+    """
+
     __tablename__ = "organization_invites"
     __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
@@ -296,6 +425,27 @@ class OrganizationInvites(Base):
 
 
 class Otps(Base):
+    """One-time password record for authentication or verification.
+
+    Attributes:
+        id: OTP identifier.
+        created_at: Creation timestamp.
+        user_id: Optional target user identifier.
+        code: Hashed OTP code.
+        type: Email or mobile delivery type.
+        purpose: OTP purpose.
+        email: Target email address.
+        phone: Target phone number.
+        expires_at: Expiration timestamp.
+        used_at: Consumption timestamp.
+        is_used: Whether the OTP was consumed.
+        attempts: Number of verification attempts.
+        max_attempts: Maximum allowed attempts.
+        ip_address: Request IP address.
+        user_agent: Request user agent.
+        user: Related user.
+    """
+
     __tablename__ = "otps"
     __table_args__ = (
         Index("otps_user_id_idx", "user_id"),
@@ -346,6 +496,21 @@ class Otps(Base):
 
 
 class Notifications(Base):
+    """Dashboard notification delivered to a user.
+
+    Attributes:
+        id: Notification identifier.
+        organization_id: Organization identifier.
+        user_id: Target user identifier.
+        title: Notification title.
+        body: Notification body.
+        type: Notification type.
+        read_at: Read timestamp.
+        created_at: Creation timestamp.
+        metadata_json: Additional notification data.
+        channels: Delivery channels.
+    """
+
     __tablename__ = "notifications"
     __table_args__ = (
         Index(
@@ -376,6 +541,22 @@ class Notifications(Base):
 
 
 class ApiKeys(Base):
+    """API key metadata for an organization or bot.
+
+    Attributes:
+        id: API-key identifier.
+        name: Display name.
+        key_hash: Hashed API key.
+        created_at: Creation timestamp.
+        organization_id: Optional organization identifier.
+        bot_id: Optional bot identifier.
+        is_active: Whether the key is active.
+        last_used_at: Last usage timestamp.
+        bot: Related bot.
+        organization: Related organization.
+        conversations_meta: Conversations using the key.
+    """
+
     __tablename__ = "api_keys"
     __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
@@ -408,6 +589,27 @@ class ApiKeys(Base):
 
 
 class Files(Base):
+    """Uploaded file metadata stored in dashboard storage.
+
+    Attributes:
+        id: File identifier.
+        created_at: Creation timestamp.
+        organization_id: Organization identifier.
+        bot_id: Bot identifier.
+        provider: Storage provider.
+        bucket: Storage bucket.
+        path: Storage object path.
+        original_filename: Original upload filename.
+        mime_type: Uploaded MIME type.
+        size_bytes: File size in bytes.
+        purpose: File purpose.
+        status: File processing status.
+        deleted_at: Soft-deletion timestamp.
+        deleted_by: Identifier of the deleter.
+        bot: Related bot.
+        organization: Related organization.
+    """
+
     __tablename__ = "files"
     __table_args__ = (
         Index("files_org_bot_path_idx", "organization_id", "bot_id", "path"),
@@ -444,6 +646,31 @@ class Files(Base):
 
 
 class TrainingSources(Base):
+    """Source selected for bot training.
+
+    Attributes:
+        id: Training-source identifier.
+        created_at: Creation timestamp.
+        organization_id: Organization identifier.
+        bot_id: Bot identifier.
+        type: Source type, such as URL or file.
+        status: Training-source lifecycle status.
+        error_message: Processing failure details.
+        source_value: URL or source reference.
+        content_hash: Content hash for deduplication.
+        original_filename: Original file name.
+        size_bytes: Source size in bytes.
+        mime_type: Source MIME type.
+        updated_at: Last update timestamp.
+        last_trained_at: Last successful training timestamp.
+        deleted_at: Soft-deletion timestamp.
+        deleted_by: Identifier of the deleter.
+        quality_status: Quality classification.
+        quality_summary: Quality analysis details.
+        bot: Related bot.
+        organization: Related organization.
+    """
+
     __tablename__ = "training_sources"
     __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
@@ -486,6 +713,31 @@ class TrainingSources(Base):
 
 
 class ConversationsMeta(Base):
+    """Conversation state and dashboard metadata.
+
+    Attributes:
+        id: Conversation identifier.
+        created_at: Creation timestamp.
+        mode: Conversation mode.
+        organization_id: Organization identifier.
+        bot_id: Bot identifier.
+        lead_id: Associated lead identifier.
+        api_key_id: API key identifier.
+        user_name: Visitor name.
+        user_email: Visitor email.
+        status: Conversation status.
+        is_archived: Whether the conversation is archived.
+        handover_status: Support handover status.
+        closed_by: Actor that closed the conversation.
+        closed_at: Closure timestamp.
+        last_message_snippet: Latest message preview.
+        last_message_at: Latest message timestamp.
+        api_key: Related API key.
+        bot: Related bot.
+        lead: Related lead.
+        organization: Related organization.
+    """
+
     __tablename__ = "conversations_meta"
     __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 
@@ -540,6 +792,25 @@ class ConversationsMeta(Base):
 
 
 class LeadFollowUps(Base):
+    """Scheduled follow-up action for a lead.
+
+    Attributes:
+        id: Follow-up identifier.
+        counsellor_id: Assigned counsellor identifier.
+        follow_up_type: Follow-up action type.
+        status: Follow-up lifecycle status.
+        scheduled_for: Scheduled execution timestamp.
+        completed_at: Completion timestamp.
+        outcome: Follow-up outcome.
+        notes: Follow-up notes.
+        created_at: Creation timestamp.
+        updated_at: Last update timestamp.
+        lead_id: Associated lead identifier.
+        deleted_at: Soft-deletion timestamp.
+        deleted_by_id: Identifier of the deleter.
+        lead: Related lead.
+    """
+
     __tablename__ = "lead_follow_ups"
     __table_args__ = (
         Index("lead_follow_ups_lead_id_idx", "lead_id"),
@@ -578,6 +849,41 @@ class LeadFollowUps(Base):
 
 
 class Leads(Base):
+    """Captured lead and qualification information.
+
+    Attributes:
+        id: Lead identifier.
+        name: Enquirer name.
+        email: Enquirer email.
+        phone: Enquirer phone.
+        enquirer_type: Enquirer relationship or type.
+        student_name: Student name.
+        student_age: Student age.
+        student_gender: Student gender.
+        course_interest: Course of interest.
+        education_level: Education level.
+        preferred_mode: Preferred study mode.
+        joining_timeline: Expected joining timeline.
+        primary_intent: Primary enquiry intent.
+        lead_priority: Lead priority.
+        priority_reason: Reason for the priority.
+        ai_summary: AI-generated lead summary.
+        recommended_next_action: Recommended next action.
+        pipeline_stage: Lead pipeline stage.
+        consent_to_contact: Whether contact consent was given.
+        updated_at: Last update timestamp.
+        captured_at: Capture timestamp.
+        deleted_at: Soft-deletion timestamp.
+        deleted_by_id: Identifier of the deleter.
+        visitor_id: Visitor identifier.
+        organization_id: Organization identifier.
+        bot_id: Bot identifier.
+        bot: Related bot.
+        conversations: Conversations associated with the lead.
+        organization: Related organization.
+        lead_follow_ups: Scheduled follow-ups.
+    """
+
     __tablename__ = "leads"
     __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
 

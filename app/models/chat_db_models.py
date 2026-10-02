@@ -29,10 +29,30 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
+    """Declarative base for Chat DB ORM models."""
+
     pass
 
 
 class Documents(Base):
+    """Indexed knowledge-unit document stored for retrieval.
+
+    Attributes:
+        id: Document identifier.
+        organization_id: Owning organization identifier.
+        bot_id: Owning bot identifier.
+        source_id: Training source identifier.
+        chunk_index: Stable order of the chunk within its source.
+        content: Knowledge-unit text.
+        token_count: Token count used during ingestion.
+        is_active: Whether the document can be retrieved.
+        deleted_at: Soft-deletion timestamp.
+        embedding_configuration_id: Configuration used to create the chunk.
+        metadata_json: Source and structure metadata, including heading paths.
+        search_vector: Generated weighted full-text search vector.
+        embeddings: Related vector embedding, when available.
+    """
+
     __tablename__ = "documents"
     __table_args__ = (
         PrimaryKeyConstraint("id", name="documents_pk"),
@@ -108,6 +128,22 @@ class Documents(Base):
 
 
 class Messages(Base):
+    """Chat message persisted for a conversation.
+
+    Attributes:
+        id: Message identifier.
+        conversation_id: Conversation identifier.
+        created_at: Creation timestamp.
+        updated_at: Last update timestamp.
+        role: Message author role.
+        agent_id: Optional support-agent identifier.
+        content_type: Message content type.
+        content: Message text or payload.
+        embedding_configuration_id: Optional embedding configuration identifier.
+        bot_configuration_id: Optional bot configuration identifier.
+        message_feedback: Feedback records associated with the message.
+    """
+
     __tablename__ = "messages"
     __table_args__ = (
         PrimaryKeyConstraint("id", name="messages_pk"),
@@ -153,6 +189,20 @@ class Messages(Base):
 
 
 class TrainingJobs(Base):
+    """Background training or cleanup job tracked in the Chat DB.
+
+    Attributes:
+        id: Job identifier.
+        organization_id: Owning organization identifier.
+        bot_id: Bot being trained.
+        status: Current job status.
+        started_at: Processing start timestamp.
+        completed_at: Completion timestamp.
+        error_message: Failure details, when applicable.
+        embedding_configuration_id: Embedding configuration for the job.
+        bot_configuration_id: Bot configuration for the job.
+    """
+
     __tablename__ = "training_jobs"
     __table_args__ = (
         PrimaryKeyConstraint("id", name="training_jobs_pk"),
@@ -186,6 +236,17 @@ class TrainingJobs(Base):
 
 
 class Embeddings(Base):
+    """Vector embedding associated with one indexed document.
+
+    Attributes:
+        id: Embedding identifier.
+        document_id: Uniquely associated document identifier.
+        embedding: pgvector embedding values.
+        created_at: Creation timestamp.
+        deleted_at: Soft-deletion timestamp.
+        document: Related indexed document.
+    """
+
     __tablename__ = "embeddings"
     __table_args__ = (
         ForeignKeyConstraint(
@@ -211,6 +272,26 @@ class Embeddings(Base):
 
 
 class RetrievalLogs(Base):
+    """Audit record for one retrieval operation.
+
+    Attributes:
+        id: Retrieval-log identifier.
+        organization_id: Requesting organization identifier.
+        bot_id: Queried bot identifier.
+        conversation_id: Conversation identifier.
+        message_id: Message that triggered retrieval.
+        query: Query sent to retrieval.
+        retrieved_document_ids: Documents returned by retrieval.
+        similarity_scores: Scores aligned with retrieved documents.
+        retrieval_threshold: Minimum similarity threshold.
+        retrieval_k: Maximum number of retrieved documents.
+        reranker_used: Whether reranking was applied.
+        embedding_configuration_id: Embedding configuration used.
+        llm_configuration_id: Bot/LLM configuration used.
+        reranked_document_ids: Documents after reranking.
+        created_at: Creation timestamp.
+    """
+
     __tablename__ = "retrieval_logs"
     __table_args__ = (
         PrimaryKeyConstraint("id", name="retrieval_logs_pkey"),
@@ -249,6 +330,17 @@ class RetrievalLogs(Base):
 
 
 class MessageFeedback(Base):
+    """User feedback attached to a chat message.
+
+    Attributes:
+        id: Feedback identifier.
+        message_id: Associated message identifier.
+        feedback: Positive or negative feedback value.
+        reason: Optional feedback explanation.
+        created_at: Creation timestamp.
+        message: Related message.
+    """
+
     __tablename__ = "message_feedback"
     __table_args__ = (
         CheckConstraint(
@@ -275,6 +367,22 @@ class MessageFeedback(Base):
 
 
 class EmbeddingConfigurations(Base):
+    """Versioned embedding configuration for a bot.
+
+    Attributes:
+        id: Configuration identifier.
+        bot_id: Bot using the configuration.
+        provider: Embedding provider name.
+        model: Embedding model name.
+        version: Provider or application version label.
+        dimension: Vector dimension.
+        chunk_size: Target ingestion chunk size.
+        chunk_overlap: Ingestion chunk overlap.
+        state: Configuration lifecycle state.
+        created_at: Creation timestamp.
+        updated_at: Last update timestamp.
+    """
+
     __tablename__ = "embedding_configurations"
     __table_args__ = (
         PrimaryKeyConstraint("id", name="embedding_config_pkey"),
@@ -323,6 +431,24 @@ class EmbeddingConfigurations(Base):
 
 # this is called bot configuration but mostly contains llm and reranker configurations
 class BotConfigurations(Base):
+    """Versioned retrieval, LLM, and reranker configuration for a bot.
+
+    Attributes:
+        id: Configuration identifier.
+        bot_id: Bot using the configuration.
+        embedding_configuration_id: Associated embedding configuration.
+        provider: LLM or configuration provider.
+        model: Model name.
+        version: Provider or application version label.
+        settings: Provider-specific settings.
+        state: Configuration lifecycle state.
+        retrieval_k: Number of candidates to retrieve.
+        similarity_threshold: Minimum semantic similarity.
+        created_by_user_id: User who created the configuration.
+        created_at: Creation timestamp.
+        updated_at: Last update timestamp.
+    """
+
     __tablename__ = "bot_configurations"
     __table_args__ = (
         PrimaryKeyConstraint("id", name="bot_config_pkey"),
