@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.training.ingestion import _extension_for_loader
-from app.services.training.jobs import process_training_job as modular_process_job
+from app.ingestion.ingestion import _extension_for_loader
+from app.ingestion.jobs import process_training_job as modular_process_job
 from app.services.worker_fns import delete_training_source_job, process_training_job
 
 

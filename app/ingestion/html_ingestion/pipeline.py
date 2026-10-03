@@ -1,11 +1,11 @@
 import logging
 from dataclasses import dataclass, field
 
-from app.services.training.html_ingestion.html_cleaner import HTMLCleaner
-from app.services.training.html_ingestion.html_extractor import HtmlExtractor
-from app.services.training.html_ingestion.markdown_converter import MarkdownConverter
-from app.services.training.html_ingestion.markdown_parser import MarkdownUnitParser
-from app.services.training.knowledge_unit import KnowledgeUnit, SourceType
+from app.ingestion.html_ingestion.html_cleaner import HTMLCleaner
+from app.ingestion.html_ingestion.html_extractor import HtmlExtractor
+from app.ingestion.html_ingestion.markdown_converter import MarkdownConverter
+from app.ingestion.html_ingestion.markdown_parser import MarkdownUnitParser
+from app.ingestion.knowledge_unit import KnowledgeUnit, SourceType
 
 logger = logging.getLogger(__name__)
 

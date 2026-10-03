@@ -4,7 +4,7 @@ import unittest
 
 import httpx
 
-from app.services.training.html_ingestion.html_extractor import HtmlExtractor
+from app.ingestion.html_ingestion.html_extractor import HtmlExtractor
 
 
 class HtmlExtractorTests(unittest.TestCase):

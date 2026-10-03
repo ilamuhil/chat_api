@@ -9,16 +9,16 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.db.session import DashboardDbSessionLocal, SessionLocal
+from app.ingestion.ingestion import (
+    process_file_training_source,
+    process_url_training_source,
+)
 from app.models.chat_db_models import (
     BotConfigurations,
     EmbeddingConfigurations,
     TrainingJobs,
 )
 from app.models.dashboard_db_models import TrainingSources
-from app.services.training.ingestion import (
-    process_file_training_source,
-    process_url_training_source,
-)
 
 logger = logging.getLogger(__name__)
 

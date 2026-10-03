@@ -22,7 +22,7 @@ from docling_core.types.doc.items.text import (
 from docling_core.types.doc.labels import DocItemLabel
 
 from app.helpers.rag import get_tokenizer
-from app.services.training.knowledge_unit import KnowledgeUnit, SourceType
+from app.ingestion.knowledge_unit import KnowledgeUnit, SourceType
 
 
 class NoAnchorProvider(ChunkingSerializerProvider):

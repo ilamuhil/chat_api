@@ -14,8 +14,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from app.services.training.html_ingestion.pipeline import HtmlIngestionPipeline
-from app.services.training.knowledge_unit import KnowledgeUnit
+from app.ingestion.html_ingestion.pipeline import HtmlIngestionPipeline
+from app.ingestion.knowledge_unit import KnowledgeUnit
 
 DEFAULT_OUTPUT_DIR = Path(r"C:\Users\Ilamuhil ilavenil\OneDrive\Desktop\outputs")
 

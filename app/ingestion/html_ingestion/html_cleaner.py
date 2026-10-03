@@ -10,7 +10,7 @@ from bs4.element import Comment
 
 from app.config.logging_config import setup_logging
 from app.helpers.utils import normalize_identifier, normalize_text
-from app.services.training.html_ingestion.faq_parser import FAQParser
+from app.ingestion.html_ingestion.faq_parser import FAQParser
 
 setup_logging()
 logger = logging.getLogger(__name__)

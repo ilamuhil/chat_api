@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from app.services.training.knowledge_unit import KnowledgeUnit
+from app.ingestion.knowledge_unit import KnowledgeUnit
 
 DEFAULT_PDF = Path(
     r"C:\Users\Ilamuhil ilavenil\OneDrive\Desktop"
@@ -112,8 +112,8 @@ def main() -> int:
     print(
         f"Loading PDF pipeline for {len(pdfs)} file(s)...", file=sys.stderr, flush=True
     )
-    from app.services.training.pdf_ingestion.pdf_extractor import PdfExtractor
-    from app.services.training.pdf_ingestion.pdf_parser import PdfParser
+    from app.ingestion.pdf_ingestion.pdf_extractor import PdfExtractor
+    from app.ingestion.pdf_ingestion.pdf_parser import PdfParser
 
     logging.basicConfig(level=logging.WARNING)
     extractor = PdfExtractor()
