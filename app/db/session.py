@@ -69,7 +69,9 @@ try:
         pool_pre_ping=True,
         pool_recycle=300,
     )
-    AsyncDashboardDbSessionLocal = async_sessionmaker(async_dashboard_db_engine)
+    AsyncDashboardDbSessionLocal = async_sessionmaker(
+        async_dashboard_db_engine, expire_on_commit=False
+    )
     DashboardDbSessionLocal = sessionmaker(
         autocommit=False, autoflush=False, bind=dashboard_db_engine
     )
@@ -109,7 +111,7 @@ try:
         pool_pre_ping=True,
         pool_recycle=300,
     )
-    AsyncSessionLocal = async_sessionmaker(async_chat_engine)
+    AsyncSessionLocal = async_sessionmaker(async_chat_engine, expire_on_commit=False)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=chat_engine)
 except Exception as e:
     # Engine/session will be unavailable until env vars are set.

@@ -79,8 +79,10 @@ async def create_model_config(
             state="draft",
         )
         chat_db.add(bot_configuration)
+        await chat_db.flush()
+        config_id = bot_configuration.id
         await chat_db.commit()
-        return ModelConfigCreateResponse(config_id=bot_configuration.id)
+        return ModelConfigCreateResponse(config_id=config_id)
     except ValueError:
         await chat_db.rollback()
         raise HTTPException(
