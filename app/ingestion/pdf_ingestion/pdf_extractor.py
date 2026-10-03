@@ -1,17 +1,9 @@
 import logging
 from pathlib import Path
-from typing import cast
 
-from docling.datamodel.base_models import ConversionStatus, InputFormat
-from docling.datamodel.pipeline_options import (
-    OcrMode,
-    PdfPipelineOptions,
-    RapidOcrOptions,
-)
+from docling.datamodel.base_models import ConversionStatus
 from docling.document_converter import (
     DocumentConverter,
-    FormatOption,
-    PdfFormatOption,
 )
 from docling_core.types.doc.common.content_layer import ContentLayer
 from docling_core.types.doc.document import DoclingDocument
@@ -23,27 +15,7 @@ logger = logging.getLogger(__name__)
 class PdfExtractor:
     converter: DocumentConverter
 
-    def __init__(self):
-        pdf_options = PdfPipelineOptions(
-            do_ocr=True,
-            do_table_structure=True,
-            ocr_options=RapidOcrOptions(
-                mode=OcrMode.PDF_AWARE_LAYOUT_REGIONS,
-                use_cls=False,
-            ),
-        )
-
-        format_options = cast(
-            dict[InputFormat, FormatOption],
-            {
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options),
-            },
-        )
-        converter = DocumentConverter(
-            allowed_formats=[InputFormat.PDF],
-            format_options=format_options,
-        )
-
+    def __init__(self, converter: DocumentConverter):
         self.converter = converter
 
     def convert_pdf(self, source_path: str | Path) -> DoclingDocument:

@@ -1,7 +1,16 @@
 from pathlib import Path
 
+from docling.document_converter import DocumentConverter
+
 
 class DocxExtractor:
+    """Extracts content from a DOCX file."""
+
+    converter: DocumentConverter
+
+    def __init__(self, converter: DocumentConverter):
+        self.converter = converter
+
     def validate_docx_path(self, file_path: str | Path) -> Path:
         docx_path = Path(file_path) if isinstance(file_path, str) else file_path
         if not docx_path.exists():
