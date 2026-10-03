@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CsvPipeline:
-    MIN_TARGET_TOKENS: int = field(default=300)
-    TARGET_TOKENS: int = field(default=600)
-    MAX_TOKENS: int = field(default=700)
+    min_tokens: int
+    target_tokens: int
+    max_tokens: int
     embedding_model: str = field(default="text-embedding-3-small")
 
     def _validate_csv_path(self, file_path: str | Path) -> Path:
@@ -71,7 +71,7 @@ class CsvPipeline:
                     row_content,
                     self.embedding_model,
                 )
-                if row_tokens > self.MAX_TOKENS:
+                if row_tokens > self.max_tokens:
                     if candidate != header_content:
                         units.append(
                             self._build_unit(
@@ -97,9 +97,9 @@ class CsvPipeline:
                     candidate,
                     self.embedding_model,
                 )
-                can_append = proposed_tokens <= self.TARGET_TOKENS or (
-                    candidate_tokens < self.MIN_TARGET_TOKENS
-                    and proposed_tokens <= self.MAX_TOKENS
+                can_append = proposed_tokens <= self.target_tokens or (
+                    candidate_tokens < self.min_tokens
+                    and proposed_tokens <= self.max_tokens
                 )
                 if can_append:
                     candidate = proposed
@@ -181,10 +181,10 @@ class CsvPipeline:
                 field_content,
                 self.embedding_model,
             )
-            if field_tokens > self.MAX_TOKENS:
+            if field_tokens > self.max_tokens:
                 raise ValueError(
                     f"CSV field '{key}' exceeds the maximum "
-                    f"allowed size of {self.MAX_TOKENS} tokens"
+                    f"allowed size of {self.max_tokens} tokens"
                 )
             proposed = (
                 field_content
@@ -195,7 +195,7 @@ class CsvPipeline:
                 proposed,
                 self.embedding_model,
             )
-            if proposed_tokens <= self.MAX_TOKENS:
+            if proposed_tokens <= self.max_tokens:
                 current_content = proposed
                 current_columns.append(key)
                 continue

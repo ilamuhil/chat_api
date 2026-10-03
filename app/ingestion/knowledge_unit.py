@@ -34,6 +34,13 @@ class WeakReason(StrEnum):
     VALUE_ONLY = "value_only"
 
 
+@dataclass(frozen=True, slots=True)
+class ChunkingConfig:
+    min_tokens: int
+    max_tokens: int
+    target_tokens: int
+
+
 @dataclass(slots=True)
 class KnowledgeUnit:
     source_type: SourceType
@@ -347,6 +354,7 @@ class KnowledgeUnit:
         cls,
         knowledge_units: list[Self],
         embedding_model: str,
+        chunking_config: ChunkingConfig,
     ) -> list[Self]:
         if not knowledge_units:
             return []
@@ -355,9 +363,6 @@ class KnowledgeUnit:
 
         if len(source_types) != 1:
             raise ValueError("All knowledge units must have the same source type")
-
-        MIN_TOKENS = 250
-        MAX_TOKENS = 500
 
         # --------------------------------------------------
         # Phase 1: clean + remove hard junk
@@ -389,7 +394,7 @@ class KnowledgeUnit:
 
             reasons = current.weak_reasons(
                 embedding_model,
-                MIN_TOKENS,
+                chunking_config.min_tokens,
             )
 
             # No weakness detected.
@@ -423,7 +428,7 @@ class KnowledgeUnit:
             ):
                 content = f"{previous.content}\n{current.content}"
 
-                if count_tokens(content, embedding_model) <= MAX_TOKENS:
+                if count_tokens(content, embedding_model) <= chunking_config.max_tokens:
                     previous.content = content
                     previous.metadata = cls._merge_metadata(
                         previous,
@@ -436,7 +441,7 @@ class KnowledgeUnit:
             if next_unit is not None and next_score >= 0:
                 content = f"{current.content}\n{next_unit.content}"
 
-                if count_tokens(content, embedding_model) <= MAX_TOKENS:
+                if count_tokens(content, embedding_model) <= chunking_config.max_tokens:
                     next_unit.content = content
                     next_unit.metadata = cls._merge_metadata(
                         current,
@@ -450,7 +455,6 @@ class KnowledgeUnit:
             # If there is no safe merge, preserve it.
             consolidated.append(current)
             i += 1
-
 
         for source_order, unit in enumerate(consolidated):
             unit.source_order = source_order

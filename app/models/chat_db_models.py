@@ -376,8 +376,9 @@ class EmbeddingConfigurations(Base):
         model: Embedding model name.
         version: Provider or application version label.
         dimension: Vector dimension.
-        chunk_size: Target ingestion chunk size.
-        chunk_overlap: Ingestion chunk overlap.
+        min_chunk_tokens: Minimum allowed ingestion chunk size.
+        target_chunk_tokens: Preferred ingestion chunk size.
+        max_chunk_tokens: Maximum allowed ingestion chunk size.
         state: Configuration lifecycle state.
         created_at: Creation timestamp.
         updated_at: Last update timestamp.
@@ -386,11 +387,6 @@ class EmbeddingConfigurations(Base):
     __tablename__ = "embedding_configurations"
     __table_args__ = (
         PrimaryKeyConstraint("id", name="embedding_config_pkey"),
-        CheckConstraint("chunk_size > 0", name="embedding_config_chunk_size_positive"),
-        CheckConstraint(
-            "chunk_overlap >= 0 and chunk_overlap < chunk_size",
-            name="embedding_config_chunk_overlap_range",
-        ),
         CheckConstraint(
             "dimension > 0",
             name="embedding_config_dimension_positive",
@@ -398,6 +394,18 @@ class EmbeddingConfigurations(Base):
         CheckConstraint(
             "state IN ('draft', 'training', 'active', 'failed', 'deprecated')",
             name="embedding_config_state_valid",
+        ),
+        CheckConstraint(
+            "min_chunk_tokens > 0",
+            name="embedding_config_min_chunk_tokens_positive",
+        ),
+        CheckConstraint(
+            "target_chunk_tokens >= min_chunk_tokens",
+            name="embedding_config_target_chunk_tokens_valid",
+        ),
+        CheckConstraint(
+            "max_chunk_tokens >= target_chunk_tokens",
+            name="embedding_config_max_chunk_tokens_valid",
         ),
         Index(
             "embedding_configurations_one_active_per_bot_idx",
@@ -414,8 +422,9 @@ class EmbeddingConfigurations(Base):
     dimension: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("1536")
     )
-    chunk_size: Mapped[int] = mapped_column(Integer, nullable=False)
-    chunk_overlap: Mapped[int] = mapped_column(Integer, nullable=False)
+    min_chunk_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_chunk_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_chunk_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     state: Mapped[str] = mapped_column(
         Text,
         nullable=False,
