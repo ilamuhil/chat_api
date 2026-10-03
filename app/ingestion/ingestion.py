@@ -94,6 +94,7 @@ def _loader_for_file(
 
 
 def _chunk_text(text: str, config: EmbeddingConfigurations) -> list[str]:
+    # ! this will break the code currently until the new pipeline is integrated.
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=config.chunk_size,
         chunk_overlap=config.chunk_overlap,

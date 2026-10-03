@@ -153,25 +153,25 @@ async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | 
         async with create_async_chat_db_session() as chat_db:
             embedding_config = (
                 await chat_db.scalars(
-                select(EmbeddingConfigurations)
-                .where(
-                    EmbeddingConfigurations.bot_id == bot_id,
-                    EmbeddingConfigurations.state.in_(["active"]),
-                )
-                .order_by(EmbeddingConfigurations.created_at.desc())
+                    select(EmbeddingConfigurations)
+                    .where(
+                        EmbeddingConfigurations.bot_id == bot_id,
+                        EmbeddingConfigurations.state.in_(["active"]),
+                    )
+                    .order_by(EmbeddingConfigurations.created_at.desc())
                 )
             ).first()
             bot_config = (
                 (
                     await chat_db.scalars(
-                    select(BotConfigurations)
-                    .where(
-                        BotConfigurations.bot_id == bot_id,
-                        BotConfigurations.embedding_configuration_id
-                        == embedding_config.id,
-                        BotConfigurations.state.in_(["active"]),
-                    )
-                    .order_by(BotConfigurations.created_at.desc())
+                        select(BotConfigurations)
+                        .where(
+                            BotConfigurations.bot_id == bot_id,
+                            BotConfigurations.embedding_configuration_id
+                            == embedding_config.id,
+                            BotConfigurations.state.in_(["active"]),
+                        )
+                        .order_by(BotConfigurations.created_at.desc())
                     )
                 ).first()
                 if embedding_config is not None
@@ -198,8 +198,9 @@ async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | 
                     "embedding_model": embedding_config.model,
                     "embedding_version": embedding_config.version,
                     "embedding_dimension": embedding_config.dimension,
-                    "chunk_size": embedding_config.chunk_size,
-                    "chunk_overlap": embedding_config.chunk_overlap,
+                    "min_chunk_tokens": embedding_config.min_chunk_tokens,
+                    "target_chunk_tokens": embedding_config.target_chunk_tokens,
+                    "max_chunk_tokens": embedding_config.max_chunk_tokens,
                     "bot_configuration_id": str(bot_config.id),
                     "llm_provider": bot_config.provider,
                     "llm_model": bot_config.model,

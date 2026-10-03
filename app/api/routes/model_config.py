@@ -59,8 +59,9 @@ async def create_model_config(
             model="text-embedding-3-small",
             version="1",
             dimension=1536,
-            chunk_size=800,
-            chunk_overlap=100,
+            min_chunk_tokens=100,
+            max_chunk_tokens=700,
+            target_chunk_tokens=400,
             state="draft",
         )
         chat_db.add(embedding_configuration)
