@@ -3,9 +3,9 @@ from dataclasses import dataclass, field
 
 from app.ingestion.html_ingestion.html_cleaner import HTMLCleaner
 from app.ingestion.html_ingestion.html_extractor import HtmlExtractor
-from app.ingestion.html_ingestion.markdown_converter import MarkdownConverter
-from app.ingestion.html_ingestion.markdown_parser import MarkdownUnitParser
 from app.ingestion.knowledge_unit import KnowledgeUnit, SourceType
+from app.ingestion.markdown_ingestion.markdown_converter import MarkdownConverter
+from app.ingestion.markdown_ingestion.markdown_parser import MarkdownUnitParser
 
 logger = logging.getLogger(__name__)
 
@@ -36,4 +36,7 @@ class HtmlIngestionPipeline:
             raise ValueError("Minimum content requirement of 200 characters not met")
         markdown = self.markdown_converter.convert(root)
         # HTML source attribution remains in canonical_url when the page provides it.
-        return self.markdown_unit_parser.parse(markdown, page_meta, SourceType.HTML)
+        parser = self.markdown_unit_parser
+        if parser is None:
+            raise RuntimeError("Markdown unit parser was not initialized.")
+        return parser.parse(markdown, SourceType.HTML, page_meta)

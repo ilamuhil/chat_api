@@ -289,10 +289,12 @@ class MarkdownUnitParser:
     def parse(
         self,
         markdown: str,
-        page_meta: dict[str, str | None],
         source_type: SourceType,
+        page_meta: dict[str, str | None] | None = None,
         source_filename: str | None = None,
     ) -> list[KnowledgeUnit]:
+        if page_meta is None:
+            page_meta = {}
         if source_filename is not None:
             page_meta = {**page_meta, "filename": source_filename}
         tokens = self.markdown_parser.parse(markdown)
