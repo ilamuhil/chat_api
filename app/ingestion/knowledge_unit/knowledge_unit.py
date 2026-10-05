@@ -24,6 +24,7 @@ class ContentType(StrEnum):
     """Canonical semantic type for a knowledge-unit's content."""
 
     TEXT = "text"
+    CODE = "code"
     HEADING = "heading"
     LIST = "list"
     TABLE = "table"

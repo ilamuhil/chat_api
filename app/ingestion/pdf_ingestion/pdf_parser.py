@@ -96,7 +96,7 @@ class PdfParser:
                 )
             case CodeItem():
                 metadata.update(
-                    content_type=ContentType.TEXT,
+                    content_type=ContentType.CODE,
                     code_language=item.code_language.value
                     if item.code_language
                     else None,

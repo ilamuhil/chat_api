@@ -26,6 +26,19 @@ class KnowledgeUnitMetadataTests(unittest.TestCase):
         self.assertEqual(units[0].heading_paths, ["Admissions"])
         self.assertEqual(units[1].heading_paths, ["Admissions"])
 
+    def test_markdown_code_blocks_keep_code_type_and_whitespace(self) -> None:
+        parser = MarkdownUnitParser(embedding_model="text-embedding-3-small")
+
+        units = parser.parse(
+            '```python\n    return "a  b"\n```',
+            SourceType.MARKDOWN,
+        )
+
+        self.assertEqual(len(units), 1)
+        self.assertIs(units[0].content_type, ContentType.CODE)
+        self.assertIn('    return "a  b"', units[0].content)
+        self.assertFalse(units[0].is_splittable_prose)
+
     def test_merging_different_types_records_component_types(self) -> None:
         left = KnowledgeUnit(
             source_type=SourceType.PDF,

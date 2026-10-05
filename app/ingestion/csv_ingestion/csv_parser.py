@@ -63,15 +63,23 @@ class CsvPipeline:
                     for value in row.values()
                 ):
                     continue
-                cleaned_row = {
-                    normalize_text(key): normalized_value
+                values_by_header = {
+                    normalize_text(key): normalize_text(value or "")
                     for key, value in row.items()
-                    if (normalized_value := normalize_text(value or ""))
+                    if key is not None
                 }
-                if not cleaned_row:
+                present_fields = [
+                    (header, values_by_header.get(header, ""))
+                    for header in normalized_headers
+                    if values_by_header.get(header, "")
+                ]
+                if not present_fields:
                     continue
-                row_content = " | ".join(f"{value}" for value in cleaned_row.values())
-                row_columns = list(cleaned_row)
+                cleaned_row = dict(present_fields)
+                row_content = " | ".join(
+                    f"{header}: {value}" for header, value in present_fields
+                )
+                row_columns = [header for header, _ in present_fields]
                 row_tokens = count_tokens(
                     row_content,
                     self.embedding_model,
@@ -135,10 +143,24 @@ class CsvPipeline:
                         len(units),
                     )
                 )
-                candidate = f"{header_content}\n{row_content}"
-                candidate_columns = list(
-                    dict.fromkeys([*normalized_headers, *row_columns])
-                )
+                next_candidate = f"{header_content}\n{row_content}"
+                if (
+                    count_tokens(next_candidate, self.embedding_model)
+                    <= self.max_tokens
+                ):
+                    candidate = next_candidate
+                    candidate_columns = list(
+                        dict.fromkeys([*normalized_headers, *row_columns])
+                    )
+                else:
+                    units.extend(
+                        self._split_oversized_row(
+                            cleaned_row,
+                            source_order_start=len(units),
+                        )
+                    )
+                    candidate = header_content
+                    candidate_columns = normalized_headers.copy()
             if candidate != header_content:
                 units.append(
                     self._build_unit(

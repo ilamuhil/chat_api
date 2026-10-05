@@ -191,7 +191,7 @@ class MarkdownUnitParser:
             token.content,
             page_meta,
             heading_path,
-            ContentType.TEXT,
+            ContentType.CODE,
             source_order,
             source_type=source_type,
             info=token.info,

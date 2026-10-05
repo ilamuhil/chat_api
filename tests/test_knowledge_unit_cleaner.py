@@ -1,6 +1,6 @@
 import unittest
 
-from app.ingestion.knowledge_unit import KnowledgeUnit, SourceType
+from app.ingestion.knowledge_unit import ContentType, KnowledgeUnit, SourceType
 from app.ingestion.knowledge_unit.ku_rules import KnowledgeUnitCleaner
 
 
@@ -68,6 +68,21 @@ class KnowledgeUnitCleanerTests(unittest.TestCase):
             {"canonical_url": "https://example.edu/admissions"},
         )
         self.assertNotIn("token_count", cleaned.metadata)
+
+    def test_code_blocks_keep_meaningful_whitespace(self) -> None:
+        content = '    return "a  b"'
+        unit = KnowledgeUnit(
+            source_type=SourceType.MARKDOWN,
+            content=content,
+            metadata={"structure": {"content_type": ContentType.CODE}},
+        )
+
+        cleaned = self.cleaner.clean(unit)
+
+        self.assertIsNotNone(cleaned)
+        assert cleaned is not None
+        self.assertEqual(cleaned.content, content)
+        self.assertFalse(cleaned.is_splittable_prose)
 
 
 if __name__ == "__main__":

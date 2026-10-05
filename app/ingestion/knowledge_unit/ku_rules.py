@@ -213,7 +213,10 @@ class KnowledgeUnitCleaner:
         )
 
     def clean(self, unit: KnowledgeUnit) -> KnowledgeUnit | None:
-        content = self.clean_content(unit.content)
+        if unit.content_type is ContentType.CODE:
+            content = self.CONTROL_CHAR_PATTERN.sub("", unit.content)
+        else:
+            content = self.clean_content(unit.content)
         if self._is_junk(content):
             return None
         metadata = deepcopy(unit.metadata)
