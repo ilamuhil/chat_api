@@ -4,7 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import ClassVar
 
-from .knowledge_unit import KnowledgeUnit, WeakReason
+from .knowledge_unit import ContentType, KnowledgeUnit, WeakReason
 
 
 class KnowledgeUnitCleaner:
@@ -272,7 +272,7 @@ class KnowledgeUnitWeaknessDetector:
         content = unit.content.strip()
         if token_count < min_tokens:
             reasons.add(WeakReason.SHORT)
-        if unit.content_type == "heading":
+        if unit.content_type is ContentType.HEADING:
             reasons.add(WeakReason.HEADING_ONLY)
         if self._looks_like_broken_sentence(content):
             reasons.add(WeakReason.BROKEN_SENTENCE)

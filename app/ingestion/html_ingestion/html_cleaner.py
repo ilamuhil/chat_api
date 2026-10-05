@@ -11,6 +11,7 @@ from bs4.element import Comment
 from app.config.logging_config import setup_logging
 from app.helpers.utils import normalize_identifier, normalize_text
 from app.ingestion.html_ingestion.faq_parser import FAQParser
+from app.ingestion.knowledge_unit import SourceMetadata
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -180,7 +181,7 @@ class HTMLCleaner:
             return str(content).strip() if content is not None else None
         return None
 
-    def extract_page_metadata(self, soup: BeautifulSoup) -> dict[str, str | None]:
+    def extract_page_metadata(self, soup: BeautifulSoup) -> SourceMetadata:
         title = soup.title.get_text(" ", strip=True) if soup.title is not None else None
         description = self.get_meta_content(soup, "name", "description")
         canonical = soup.select_one("link[rel~='canonical']")

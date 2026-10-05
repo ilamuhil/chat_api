@@ -7,7 +7,12 @@ from pathlib import Path
 from app.config.logging_config import setup_logging
 from app.helpers.rag import count_tokens
 from app.helpers.utils import normalize_text
-from app.ingestion.knowledge_unit import KnowledgeUnit, SourceType
+from app.ingestion.knowledge_unit import (
+    ContentType,
+    KnowledgeUnit,
+    KnowledgeUnitMetadata,
+    SourceType,
+)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -225,18 +230,19 @@ class CsvPipeline:
         columns: list[str],
         source_order: int,
     ) -> KnowledgeUnit:
+        metadata: KnowledgeUnitMetadata = {
+            "structure": {
+                "content_type": ContentType.TABLE,
+                "columns": columns,
+            },
+            "token_count": count_tokens(
+                content,
+                self.embedding_model,
+            ),
+        }
         return KnowledgeUnit(
             source_type=SourceType.CSV,
             content=content,
-            metadata={
-                "structure": {
-                    "content_type": "table",
-                    "columns": columns,
-                },
-                "token_count": count_tokens(
-                    content,
-                    self.embedding_model,
-                ),
-            },
+            metadata=metadata,
             source_order=source_order,
         )

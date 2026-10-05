@@ -1,12 +1,17 @@
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any, TypeVar
 
-from .knowledge_unit import ChunkingConfig, KnowledgeUnit, WeakReason
+from .knowledge_unit import (
+    ChunkingConfig,
+    ContentType,
+    KnowledgeUnit,
+    KnowledgeUnitMetadata,
+    SplitMetadata,
+    StructureMetadata,
+    WeakReason,
+)
 from .ku_rules import KnowledgeUnitWeaknessDetector
-
-Unit = TypeVar("Unit", bound=KnowledgeUnit)
 
 
 class KnowledgeUnitMerger:
@@ -17,8 +22,8 @@ class KnowledgeUnitMerger:
         self.tokens = tokens
         self.detector = KnowledgeUnitWeaknessDetector()
 
-    def merge(self, units: list[Unit]) -> list[Unit]:
-        result: list[Unit] = []
+    def merge(self, units: list[KnowledgeUnit]) -> list[KnowledgeUnit]:
+        result: list[KnowledgeUnit] = []
         for index, current in enumerate(units):
             reasons = self.detector.detect(
                 current, self.tokens(current.content), self.config.min_tokens
@@ -61,13 +66,15 @@ class KnowledgeUnitMerger:
         return result
 
     @staticmethod
-    def compatible(left: str | None, right: str | None) -> bool:
+    def compatible(
+        left: ContentType | None,
+        right: ContentType | None,
+    ) -> bool:
         if left is None or right is None or left == right:
             return True
         pairs = {
-            frozenset({"text", "list"}),
-            frozenset({"text", "heading"}),
-            frozenset({"paragraph", "text"}),
+            frozenset({ContentType.TEXT, ContentType.LIST}),
+            frozenset({ContentType.TEXT, ContentType.HEADING}),
         }
         return frozenset({left, right}) in pairs
 
@@ -114,7 +121,10 @@ class KnowledgeUnitMerger:
         return score
 
     @staticmethod
-    def merge_metadata(left: KnowledgeUnit, right: KnowledgeUnit) -> dict[str, Any]:
+    def merge_metadata(
+        left: KnowledgeUnit,
+        right: KnowledgeUnit,
+    ) -> KnowledgeUnitMetadata:
         metadata = deepcopy(right.metadata)
         metadata.update(deepcopy(left.metadata))
         ls, rs = left.metadata.get("source", {}), right.metadata.get("source", {})
@@ -133,22 +143,33 @@ class KnowledgeUnitMerger:
             left.metadata.get("structure", {}),
             right.metadata.get("structure", {}),
         )
-        structure = deepcopy(rstruct)
+        structure: StructureMetadata = deepcopy(rstruct)
         structure.update(deepcopy(lstruct))
         structure["heading_paths"] = deepcopy(left.heading_paths or right.heading_paths)
         for key in ("source_items", "labels"):
             if key in lstruct or key in rstruct:
                 structure[key] = deepcopy(lstruct.get(key, []) + rstruct.get(key, []))
-        if left.content_type == right.content_type:
-            structure["content_type"] = left.content_type
-        elif {left.content_type, right.content_type} <= {"text", "paragraph"}:
-            structure["content_type"] = "text"
+        left_type = left.content_type
+        right_type = right.content_type
+        if left_type is not None and left_type == right_type:
+            structure["content_type"] = left_type
+            if left_type is ContentType.MIXED:
+                structure["content_types"] = list(
+                    dict.fromkeys(left.content_types + right.content_types)
+                )
+        elif left_type is None and right_type is None:
+            structure["content_type"] = ContentType.OTHER
+        elif {left_type, right_type} <= {ContentType.TEXT, None}:
+            structure["content_type"] = ContentType.TEXT
         else:
-            structure["content_type"] = "mixed"
+            structure["content_type"] = ContentType.MIXED
+            structure["content_types"] = list(
+                dict.fromkeys(left.content_types + right.content_types)
+            )
         metadata.update(source=source, structure=structure)
         metadata.pop("token_count", None)
         # A single child's split index is misleading after merging children.
-        parts = []
+        parts: list[SplitMetadata] = []
         for unit in (left, right):
             parts.extend(deepcopy(unit.metadata.get("split_parts", [])))
             if "split" in unit.metadata:

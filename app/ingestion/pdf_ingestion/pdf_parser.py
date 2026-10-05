@@ -22,7 +22,13 @@ from docling_core.types.doc.items.text import (
 from docling_core.types.doc.labels import DocItemLabel
 
 from app.helpers.rag import get_tokenizer
-from app.ingestion.knowledge_unit import KnowledgeUnit, SourceType
+from app.ingestion.knowledge_unit import (
+    ContentType,
+    KnowledgeUnit,
+    KnowledgeUnitMetadata,
+    SourceType,
+    StructureMetadata,
+)
 
 
 class NoAnchorProvider(ChunkingSerializerProvider):
@@ -68,15 +74,15 @@ class PdfParser:
         match item:
             case ListItem():
                 metadata.update(
-                    content_type="list",
+                    content_type=ContentType.LIST,
                     list_kind="ordered" if item.enumerated else "unordered",
                 )
             case TableItem():
                 metadata.update(
                     content_type=(
-                        "document_index"
+                        ContentType.OTHER
                         if item.label == DocItemLabel.DOCUMENT_INDEX
-                        else "table"
+                        else ContentType.TABLE
                     ),
                     num_rows=item.data.num_rows,
                     num_columns=item.data.num_cols,
@@ -84,31 +90,37 @@ class PdfParser:
                 if include_table_data:
                     metadata.update(table_info=item.data.model_dump(mode="json"))
             case SectionHeaderItem():
-                metadata.update(content_type="heading", heading_level=item.level)
+                metadata.update(
+                    content_type=ContentType.HEADING,
+                    heading_level=item.level,
+                )
             case CodeItem():
                 metadata.update(
-                    content_type="code",
+                    content_type=ContentType.TEXT,
                     code_language=item.code_language.value
                     if item.code_language
                     else None,
                 )
             case TitleItem():
-                metadata.update(content_type="title")
+                metadata.update(content_type=ContentType.HEADING)
             case PictureItem():
                 metadata.update(
-                    content_type="img", image_available=item.image is not None
+                    content_type=ContentType.OTHER,
+                    image_available=item.image is not None,
                 )
 
             case FormulaItem():
-                metadata.update(content_type="formula")
+                metadata.update(content_type=ContentType.TEXT)
             case TextItem():
                 metadata.update(
-                    content_type="text"
-                    if item.label in {DocItemLabel.TEXT, DocItemLabel.PARAGRAPH}
-                    else item.label.value
+                    content_type=(
+                        ContentType.TEXT
+                        if item.label in {DocItemLabel.TEXT, DocItemLabel.PARAGRAPH}
+                        else ContentType.OTHER
+                    )
                 )
             case _:
-                metadata["content_type"] = "unknown"
+                metadata["content_type"] = ContentType.OTHER
 
         if isinstance(item, (TableItem, PictureItem, CodeItem)):
             metadata.update(
@@ -159,18 +171,20 @@ class PdfParser:
 
         types = {item["content_type"] for item in items}
 
-        structure = {
+        structure: StructureMetadata = {
             "heading_paths": list(chunk.meta.headings or []),
-            "content_type": "mixed"
+            "content_type": ContentType.MIXED
             if len(types) > 1
             else next(iter(types))
             if types
-            else "text",
+            else ContentType.TEXT,
             "labels": [item.get("label") for item in items],
             "source_items": items,
         }
+        if len(types) > 1:
+            structure["content_types"] = sorted(types, key=lambda value: value.value)
 
-        if types == {"list"}:
+        if types == {ContentType.LIST}:
             kinds = {item["list_kind"] for item in items}
 
             structure.update(
@@ -179,21 +193,21 @@ class PdfParser:
 
         # build and return the knowledge unit corresponding to the chunk
 
+        metadata: KnowledgeUnitMetadata = {
+            "source": {
+                "filename": filename,
+                "page": pages[0] if pages else None,
+                "pages": pages,
+                "provenance": provenance_data,
+            },
+            "structure": structure,
+            "token_count": self.tokenizer.count_tokens(content),
+        }
         return KnowledgeUnit(
             content=content,
             source_order=source_order,
             source_type=SourceType.PDF,
-            metadata={
-                "source": {
-                    "filename": filename,
-                    "page": pages[0] if pages else None,
-                    "pages": pages,
-                    "provenance": provenance_data,
-                },
-                "structure": structure,
-                # Keep token accounting consistent with HTML and CSV units.
-                "token_count": self.tokenizer.count_tokens(content),
-            },
+            metadata=metadata,
         )
 
     def chunk_pdf(

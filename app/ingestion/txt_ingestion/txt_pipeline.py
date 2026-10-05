@@ -5,7 +5,12 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from app.ingestion import KnowledgeUnit, SourceType
+from app.ingestion.knowledge_unit import (
+    ContentType,
+    KnowledgeUnit,
+    KnowledgeUnitMetadata,
+    SourceType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +42,10 @@ class TxtPipeline(BaseModel):
         with open(validated_path, encoding="utf-8") as txt_file:
             units = []
             content = ""
-            metadata = {
+            metadata: KnowledgeUnitMetadata = {
                 "source": {"filename": filename},
                 "structure": {
-                    "content_type": "paragraph",
+                    "content_type": ContentType.TEXT,
                     "heading_paths": [],
                 },
             }

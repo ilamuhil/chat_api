@@ -5,7 +5,13 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 from app.helpers.rag import count_tokens
-from app.ingestion.knowledge_unit import KnowledgeUnit, SourceType
+from app.ingestion.knowledge_unit import (
+    ContentType,
+    KnowledgeUnit,
+    KnowledgeUnitMetadata,
+    SourceMetadata,
+    SourceType,
+)
 
 
 @dataclass
@@ -135,26 +141,26 @@ class MarkdownUnitParser:
     def _build_unit(
         self,
         content: str,
-        page_meta: dict[str, str | None],
+        page_meta: SourceMetadata,
         heading_path: list[str],
-        content_type: str,
+        content_type: ContentType,
         source_order: int,
         source_type: SourceType,
-        **metadata: Any,
+        **structure_metadata: Any,
     ) -> KnowledgeUnit:
+        metadata: KnowledgeUnitMetadata = {
+            "source": page_meta.copy(),
+            "structure": {
+                "heading_paths": heading_path.copy(),
+                "content_type": content_type,
+                **structure_metadata,
+            },
+            "token_count": count_tokens(content, self.embedding_model),
+        }
         return KnowledgeUnit(
             content=content,
             source_type=source_type,
-            metadata={
-                "source": page_meta.copy(),
-                "structure": {
-                    "heading_paths": heading_path.copy(),
-                    "content_type": content_type,
-                    **metadata,
-                },
-                # Keep token accounting consistent across ingestion formats.
-                "token_count": count_tokens(content, self.embedding_model),
-            },
+            metadata=metadata,
             source_order=source_order,
         )
 
@@ -185,7 +191,7 @@ class MarkdownUnitParser:
             token.content,
             page_meta,
             heading_path,
-            "code",
+            ContentType.TEXT,
             source_order,
             source_type=source_type,
             info=token.info,
@@ -209,7 +215,7 @@ class MarkdownUnitParser:
             "\n".join(lines[start_line:end_line]),
             page_meta,
             heading_path,
-            "blockquote",
+            ContentType.TEXT,
             source_order,
             source_type=source_type,
         )
@@ -229,7 +235,7 @@ class MarkdownUnitParser:
             self._gen_table_content(headers, rows),
             page_meta,
             heading_path,
-            "table",
+            ContentType.TABLE,
             source_order,
             source_type=source_type,
             headers=headers,
@@ -258,7 +264,7 @@ class MarkdownUnitParser:
             content,
             page_meta,
             current_path or heading_path,
-            "list",
+            ContentType.LIST,
             source_order,
             source_type=source_type,
             list_kind=list_kind,
@@ -280,7 +286,7 @@ class MarkdownUnitParser:
             self._inline_text(tokens[index + 1]),
             page_meta,
             heading_path,
-            "text",
+            ContentType.TEXT,
             source_order,
             source_type,
         )
@@ -290,7 +296,7 @@ class MarkdownUnitParser:
         self,
         markdown: str,
         source_type: SourceType,
-        page_meta: dict[str, str | None] | None = None,
+        page_meta: SourceMetadata | None = None,
         source_filename: str | None = None,
     ) -> list[KnowledgeUnit]:
         if page_meta is None:

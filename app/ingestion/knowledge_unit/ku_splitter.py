@@ -1,13 +1,10 @@
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import replace
-from typing import TypeVar
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from .knowledge_unit import ChunkingConfig, KnowledgeUnit
-
-Unit = TypeVar("Unit", bound=KnowledgeUnit)
+from .knowledge_unit import ChunkingConfig, KnowledgeUnit, SplitMetadata
 
 
 class KnowledgeUnitSplitter:
@@ -18,7 +15,7 @@ class KnowledgeUnitSplitter:
         self.tokens = tokens
         self._splitter: RecursiveCharacterTextSplitter | None = None
 
-    def split(self, unit: Unit) -> list[Unit]:
+    def split(self, unit: KnowledgeUnit) -> list[KnowledgeUnit]:
         if (
             not unit.is_splittable_prose
             or self.tokens(unit.content) <= self.config.max_tokens
@@ -53,14 +50,15 @@ class KnowledgeUnitSplitter:
         if "".join(text for text, _ in chunks) != unit.content:
             raise RuntimeError("Splitting changed or dropped source content")
 
-        children: list[Unit] = []
+        children: list[KnowledgeUnit] = []
         for index, (text, size) in enumerate(chunks):
             metadata = deepcopy(unit.metadata)
             metadata["token_count"] = size
-            metadata["split"] = {
+            split_metadata: SplitMetadata = {
                 "parent_source_order": unit.source_order,
                 "index": index,
                 "count": len(chunks),
             }
+            metadata["split"] = split_metadata
             children.append(replace(unit, content=text, metadata=metadata))
         return children
