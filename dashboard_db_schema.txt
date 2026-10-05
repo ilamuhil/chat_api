@@ -187,7 +187,7 @@ organization_id    text REFERENCES organizations(id) ON DELETE CASCADE
 bot_id             uuid REFERENCES bots(id) ON DELETE CASCADE
 type               text
 status             text
-error_message      text
+error_message      jsonb NOT NULL DEFAULT \'[]\'
 source_value       text
 content_hash       text
 original_filename  text

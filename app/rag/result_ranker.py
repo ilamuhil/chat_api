@@ -4,9 +4,9 @@ from app.rag.shared_dataclasses import RankedCandidate, RetrievalCandidate
 
 
 class ResultRanker(BaseModel):
-    rrf_k: int = Field(default=60, description="Smoothing factor for RRF.")
+    rrf_k: int = Field(default=60, gt=0, description="Smoothing factor for RRF.")
     max_candidates: int = Field(
-        default=100, description="Maximum number of candidates to rank."
+        default=100, gt=0, description="Maximum number of candidates to rank."
     )
 
     def rank(
@@ -79,10 +79,10 @@ class ResultRanker(BaseModel):
             RankedCandidate(
                 rrf_score=score,
                 rrf_rank=rank,
+                final_rank=rank,
                 candidate=candidate,
             )
             for rank, (score, candidate) in enumerate(
                 fused[: self.max_candidates], start=1
             )
         ]
-        # * no reranker implemented. but it can be done here

@@ -1,7 +1,7 @@
 """Contains all the components of the RAG pipeline."""
 
-from retrieval_pipeline import RetrievalPipeline
-from shared_dataclasses import (
+from .retrieval_pipeline import RetrievalPipeline
+from .shared_dataclasses import (
     ContextBundle,
     RetrievalRequest,
     RetrievalResult,

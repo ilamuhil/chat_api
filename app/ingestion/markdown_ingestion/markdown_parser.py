@@ -4,7 +4,6 @@ from typing import Any, ClassVar
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-from app.helpers.rag import count_tokens
 from app.ingestion.knowledge_unit import (
     ContentType,
     KnowledgeUnit,
@@ -12,6 +11,7 @@ from app.ingestion.knowledge_unit import (
     SourceMetadata,
     SourceType,
 )
+from app.rag.embeddings import count_tokens
 
 
 @dataclass

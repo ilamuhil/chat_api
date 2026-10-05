@@ -2,22 +2,25 @@ import logging
 
 from langchain_openai import OpenAIEmbeddings
 from pydantic import BaseModel
-from sqlalchemy import and_, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat_db_models import (
-    BotConfigurations,
     Documents,
     EmbeddingConfigurations,
     Embeddings,
 )
-from app.rag.shared_dataclasses import RetrievalCandidate, RetrievalRequest
+from app.rag.shared_dataclasses import (
+    RetrievalCandidate,
+    RetrievalFailure,
+    RetrievalRequest,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class HybridRetriever(BaseModel):
-    async def _keyword_search(
+    async def keyword_search(
         self,
         query: str,
         request: RetrievalRequest,
@@ -28,7 +31,16 @@ class HybridRetriever(BaseModel):
         if not query.strip():
             return []
 
-        search_query = func.plainto_tsquery("english", query)
+        if retrieval_k <= 0:
+            raise ValueError("Search limit must be positive.")
+        # PostgreSQL parses and escapes terms; joining lexemes with OR preserves
+        # exact program names/codes without requiring every word of a question.
+        lexemes = func.tsvector_to_array(func.to_tsvector("english", query))
+        terms = func.unnest(lexemes).table_valued("lexeme").render_derived()
+        expression = select(
+            func.string_agg(func.quote_literal(terms.c.lexeme), " | ")
+        ).scalar_subquery()
+        search_query = func.to_tsquery("english", func.coalesce(expression, ""))
         keyword_score = func.ts_rank(
             Documents.search_vector,
             search_query,
@@ -44,7 +56,7 @@ class HybridRetriever(BaseModel):
                 Documents.deleted_at.is_(None),
                 Documents.search_vector.op("@@")(search_query),
             )
-            .order_by(keyword_score.desc(), Documents.chunk_index)
+            .order_by(keyword_score.desc(), Documents.chunk_index, Documents.id)
             .limit(retrieval_k)
         )
 
@@ -53,7 +65,11 @@ class HybridRetriever(BaseModel):
             rows = result.all()
         except Exception as error:
             logger.exception("Error performing keyword search", exc_info=error)
-            raise ValueError("Keyword search failed.") from error
+            raise RetrievalFailure(
+                "keyword_search_failed",
+                "keyword_search",
+                "Keyword reference search is temporarily unavailable. Please try again shortly.",
+            ) from error
 
         return [
             RetrievalCandidate(
@@ -69,22 +85,28 @@ class HybridRetriever(BaseModel):
 
     async def embed_query(self, query: str, model: str, dimensions: int) -> list[float]:
         try:
-            embeddings = OpenAIEmbeddings(model=model, dimensions=dimensions)
+            embeddings = OpenAIEmbeddings(
+                model=model, dimensions=dimensions, timeout=15, max_retries=1
+            )
             return await embeddings.aembed_query(query)
         except Exception as error:
             logger.exception("Failed to embed query", extra={"error": str(error)})
-            raise ValueError("Failed to embed query. Please retry.") from error
+            raise RetrievalFailure(
+                "query_embedding_failed",
+                "query_embedding",
+                "The search request could not be processed by the embedding provider. Please try again shortly.",
+            ) from error
 
-    async def _semantic_search(
-    self,
-    query: str,
-    request: RetrievalRequest,
-    chat_session: AsyncSession,
-    limit: int,
-    *,
-    embedding_configuration: EmbeddingConfigurations,
-    similarity_threshold: float,
-) -> list[RetrievalCandidate]:
+    async def semantic_search(
+        self,
+        query: str,
+        request: RetrievalRequest,
+        chat_session: AsyncSession,
+        limit: int,
+        *,
+        embedding_configuration: EmbeddingConfigurations,
+        similarity_threshold: float,
+    ) -> list[RetrievalCandidate]:
         """Return active documents ranked by semantic similarity."""
         if not query.strip():
             return []
@@ -123,7 +145,7 @@ class HybridRetriever(BaseModel):
                 Embeddings.deleted_at.is_(None),
                 distance <= max_distance,
             )
-            .order_by(distance, Documents.chunk_index)
+            .order_by(distance, Documents.chunk_index, Documents.id)
             .limit(limit)
         )
 
@@ -135,7 +157,11 @@ class HybridRetriever(BaseModel):
                 "Error performing semantic search",
                 extra={"bot_id": str(request.bot_id)},
             )
-            raise ValueError("Semantic search failed.") from error
+            raise RetrievalFailure(
+                "semantic_search_failed",
+                "semantic_search",
+                "Semantic reference search is temporarily unavailable. Please try again shortly.",
+            ) from error
 
         return [
             RetrievalCandidate(

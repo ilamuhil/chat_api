@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.config.logging_config import setup_logging
-from app.helpers.rag import count_tokens
 from app.helpers.utils import normalize_text
 from app.ingestion.knowledge_unit import (
     ContentType,
@@ -13,6 +12,7 @@ from app.ingestion.knowledge_unit import (
     KnowledgeUnitMetadata,
     SourceType,
 )
+from app.rag.embeddings import count_tokens
 
 setup_logging()
 logger = logging.getLogger(__name__)

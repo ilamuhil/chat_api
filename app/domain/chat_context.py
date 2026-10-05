@@ -4,9 +4,11 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from app.rag.shared_dataclasses import RetrievalResult
+
 
 @dataclass
 class InstituteContext:
     bot_prefs: dict[str, Any]
-    rag_context: str = ""
+    retrieval_result: RetrievalResult | None = None
     conversation_id: uuid.UUID | None = None

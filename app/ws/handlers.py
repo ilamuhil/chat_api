@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 BOT_PREFS_TTL_SECONDS = 5 * 60
 REQUIRED_BOT_PREF_KEYS = {
     "bot_id",
+    "bot_configuration_id",
     "embedding_configuration_id",
     "embedding_model",
     "embedding_dimension",

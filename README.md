@@ -127,23 +127,101 @@ other explicitly synchronous callbacks.
 
 ## RAG and ingestion
 
-Training workers ingest supported sources into knowledge units before
-persistence and embedding:
+Training workers use `app.ingestion.pipeline.IngestionPipeline` to extract each
+source into knowledge units, consolidate them with the configuration's minimum,
+target, and maximum token limits, and persist documents and embeddings:
 
-- HTML pages are cleaned, converted to Markdown, and parsed into structured
-  knowledge units.
-- PDFs are extracted with Docling and converted into token-aware units.
-- CSV files are converted into table-oriented units.
-- Markdown is handled by the shared Markdown parser when supplied by an
-  ingestion pipeline.
+- URL and uploaded HTML content use the HTML extractor/cleaner, Markdown
+  converter, and shared Markdown parser.
+- PDFs use the shared Docling converter and token-aware PDF parser.
+- DOCX files use the Docling extractor and shared Markdown parser.
+- CSV files use the table-oriented CSV parser.
+- Markdown files use the shared Markdown parser; TXT files use the text pipeline.
 
-Knowledge-unit structure keeps heading context in
-`metadata.structure.heading_paths`. DOCX and XLSX ingestion are not currently
-implemented.
+Supported file extensions are `.csv`, `.docx`, `.html`, `.htm`, `.md`, `.markdown`,
+`.pdf`, and `.txt`. XLSX ingestion is not implemented. Unknown types fail explicitly.
+Filename metadata takes precedence over MIME type when selecting a parser.
+
+Knowledge-unit metadata preserves source IDs, original filenames or URLs,
+heading paths, content types, and parser-specific page/table information.
+Document text includes heading context. Embedding and tokenization helpers live
+in `app/rag/embeddings.py`.
+
+Each source's documents and embeddings are committed together. Retrying a source
+replaces only the documents for its embedding configuration; a failed extraction
+or embedding leaves existing documents intact. Failed sources can be queued
+again. Configuration states track readiness only: unsuccessful training returns
+a new configuration to `draft`, and existing active configurations stay active.
+Training activates a configuration pair only after every requested source succeeds.
+
+Source and job `error_message` columns store JSONB arrays. Each error includes
+`id`, `code`, `stage`, `message`, `action`, `retryable`, `occurred_at`, `job_id`,
+`source_id`, and `resolved_at`. New errors append to the history; successful
+retries mark previous source errors resolved. Provider/SQL exception text remains
+in logs; user-facing errors use safe messages and suggested actions. `retryable`
+describes whether retrying without correcting the source is likely to help;
+every `training_failed` source is eligible for an explicit retry.
+
+`POST /api/training/queue` accepts optional `source_ids` and `retry_failed: true`
+to retry only failed sources. The dashboard exposes individual retries and a
+"Retry failed sources" button. `GET /api/training/jobs/{job_id}` exposes job
+status, source error histories, and retry source IDs. Queue errors, outer worker
+failures, RQ timeouts, and cleanup errors use the same error format. RQ stores a
+fallback error in job metadata if database error reporting is unavailable.
+
+Dashboard DB changes are owned by Prisma in `../chat-dashboard`: migration
+`20261005123000_structured_training_errors` converts source errors to JSONB.
+Chat DB changes use Alembic revision `6e40a12bc893`, which converts job errors,
+adds selected source IDs, and removes `failed` from configuration states. Both
+migrations preserve legacy messages as error-history entries.
+
+Worker entry points are `app.ingestion.jobs.process_training_job` and
+`app.ingestion.cleanup.delete_training_source_job`. Deploy with the RQ queue
+drained of tasks referencing the removed `app.services.worker_fns` module.
+Training jobs allow 30 minutes for extraction and embedding, including Docling OCR.
 
 At retrieval time, keyword search uses the generated `documents.search_vector`
 GIN index. The vector combines weighted heading paths and document content.
-Semantic search uses the active embedding and bot configuration pair.
+Semantic search uses the active embedding and bot configuration pair. Chat now invokes
+`app.rag.RetrievalPipeline` for each AI response. It reads prior user/assistant
+turns from that conversation's agent checkpoint before adding the current
+message, bounds history, and rewrites follow-ups into standalone search queries.
+The original user message still goes to the answer agent. Rewrite failures fall
+back to the original query.
+
+Keyword retrieval matches any parsed query lexeme against the weighted heading
+and content vector. Semantic retrieval applies the configured cosine similarity
+threshold. Both searches exclude other organizations, bots, configurations,
+inactive documents and deleted documents; semantic search also excludes deleted
+vectors. Each branch returns up to `retrieval_k` candidates. Reciprocal rank
+fusion combines and deduplicates the two lists; it does not use an LLM reranker.
+
+Context assembly keeps complete chunks within the answer model's token budget,
+including numbered source labels, headings and page information. Oversize chunks
+are skipped so shorter evidence can fit. The agent cites these blocks with `[1]`,
+`[2]`, etc. WebSocket AI replies retain the existing message format and add
+`retrieval_status` plus `sources` (citation number, source/document IDs, label,
+page, URL). Clients can use this metadata to display source links. No-match or
+budget-exhausted results produce `no_evidence`; search errors produce
+`unavailable`. Both still allow greetings, lead capture and counsellor handover,
+while factual answers must use the current evidence.
+
+Optional `bot_configurations.settings` controls `rewrite_model`,
+`max_history_tokens` (default 2000), `max_query_tokens` (256),
+`max_context_tokens` (8000), and `rrf_k` (60). The active answer model determines
+context token counts. The pipeline validates the active configuration pair used
+by the chat session.
+
+Chat-only Alembic revision `8bf16c07a2de` adds `retrieval_logs.details` JSONB. It
+records the original/rewritten query, status, keyword/semantic ranks and scores,
+fusion scores, context selection and source references. Rewrite fallbacks and
+search failures also retain safe reasons and stages in this audit record. Existing cosine score
+arrays use NULL for keyword-only results. No Dashboard DB change is needed.
+
+Run the unit suite with `.venv/bin/python -m unittest discover -s tests`.
+The optional PostgreSQL/pgvector verification runs with
+`RUN_POSTGRES_RETRIEVAL_TESTS=1 .venv/bin/python -m unittest discover -s tests -p test_postgres_retrieval.py`;
+it mocks embedding calls and rolls back all fixture writes.
 
 ## Project Structure
 
@@ -170,8 +248,7 @@ chat_api/
 │   ├── domain/                   # Domain models (Pydantic)
 │   │   └── chat.py              # Chat session models
 │   ├── helpers/                  # Helper utilities
-│   │   ├── rag.py               # Embeddings and async vector retrieval
-│   │   └── utils.py             # Text cleaning, R2 storage helpers
+│   │   └── utils.py             # Text normalization helpers
 │   ├── infra/                     # Infrastructure
 │   │   ├── redis_client.py      # Redis client configuration
 │   │   └── r2_storage.py        # Cloudflare R2 (S3) client helpers
@@ -180,10 +257,9 @@ chat_api/
 │   │   └── dashboard_db_models.py # Dashboard DB models (orgs/bots/training sources/files)
 │   ├── services/                  # Business logic
 │   │   ├── chat.py              # Chat message handling
-│   │   ├── notifications.py     # Dashboard notification persistence
-│   │   └── training/            # Source ingestion and knowledge-unit creation
-│   ├── rag/                      # Query preparation and hybrid retrieval
-│   └── services/worker_fns.py   # Background job functions
+│   │   └── notifications.py     # Dashboard notification persistence
+│   ├── ingestion/                # Parsers, knowledge units, training/cleanup jobs
+│   ├── rag/                      # Embeddings, query preparation, hybrid retrieval
 │   ├── ws/                        # WebSocket utilities
 │   │   └── auth.py              # WebSocket authentication
 │   ├── logging_config.py         # Logging configuration

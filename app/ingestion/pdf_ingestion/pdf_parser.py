@@ -21,7 +21,6 @@ from docling_core.types.doc.items.text import (
 )
 from docling_core.types.doc.labels import DocItemLabel
 
-from app.helpers.rag import get_tokenizer
 from app.ingestion.knowledge_unit import (
     ContentType,
     KnowledgeUnit,
@@ -29,6 +28,7 @@ from app.ingestion.knowledge_unit import (
     SourceType,
     StructureMetadata,
 )
+from app.rag.embeddings import get_tokenizer
 
 
 class NoAnchorProvider(ChunkingSerializerProvider):

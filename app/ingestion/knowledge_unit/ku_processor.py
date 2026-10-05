@@ -1,4 +1,4 @@
-from app.helpers.rag import count_tokens
+from app.rag.embeddings import count_tokens
 
 from .knowledge_unit import ChunkingConfig, KnowledgeUnit
 from .ku_merger import KnowledgeUnitMerger

@@ -1,6 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.helpers.rag import count_tokens
+from app.rag.embeddings import count_tokens
 from app.rag.shared_dataclasses import (
     ContextBundle,
     RankedCandidate,
@@ -10,7 +10,7 @@ from app.rag.shared_dataclasses import (
 
 class ContextAssembler(BaseModel):
     context_model: str
-    max_context_tokens: int
+    max_context_tokens: int = Field(gt=0)
 
     def assemble(
         self,
@@ -32,13 +32,16 @@ class ContextAssembler(BaseModel):
             metadata = candidate.metadata or {}
             source = metadata.get("source") or {}
             structure = metadata.get("structure") or {}
+            source = source if isinstance(source, dict) else {}
+            structure = structure if isinstance(structure, dict) else {}
 
             label = (
                 source.get("filename")
                 or source.get("canonical_url")
+                or source.get("url")
                 or str(candidate.source_id)
             )
-            url = source.get("canonical_url")
+            url = source.get("canonical_url") or source.get("url")
             heading_paths = structure.get("heading_paths") or []
             heading = " > ".join(
                 part for part in heading_paths if isinstance(part, str)
@@ -48,8 +51,10 @@ class ContextAssembler(BaseModel):
             if raw_pages is None:
                 pages = []
             elif isinstance(raw_pages, list):
-                pages = [page for page in raw_pages if isinstance(page, int)]
-            elif isinstance(raw_pages, int):
+                pages = sorted(
+                    {page for page in raw_pages if type(page) is int and page > 0}
+                )
+            elif type(raw_pages) is int and raw_pages > 0:
                 pages = [raw_pages]
             else:
                 pages = []
@@ -92,6 +97,7 @@ class ContextAssembler(BaseModel):
                 seen_references.add(reference_key)
                 source_references.append(
                     SourceReference(
+                        citation_number=citation_number,
                         source_id=candidate.source_id,
                         document_id=candidate.document_id,
                         label=f"[{citation_number}] {label}",

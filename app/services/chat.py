@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -19,16 +18,21 @@ from app.db.session import (
     create_async_dashboard_db_session,
 )
 from app.domain import ChatSession, InstituteContext
-from app.helpers.rag import embed_query, retrieve_closest_embeddings_async
 from app.infra.redis_store import set_data
-from app.models.chat_db_models import Documents, Embeddings, Messages, RetrievalLogs
+from app.models.chat_db_models import Messages, RetrievalLogs
 from app.models.dashboard_db_models import ConversationsMeta
+from app.rag import (
+    RetrievalPipeline,
+    RetrievalRequest,
+    RetrievalResult,
+    RetrievalResultStatus,
+)
+from app.rag.shared_dataclasses import ConversationTurn, PreparedQuery, RetrievalFailure
 
 logger = logging.getLogger(__name__)
 
 MessageRole = Literal["user", "ai", "support_agent", "system"]
 ContentType = Literal["text", "file"]
-RetrievalRow = tuple[Embeddings, Documents, float]
 
 INSUFFICIENT_CONTEXT_MESSAGE = (
     "I don't have confirmed information about that. "
@@ -169,7 +173,7 @@ async def _persist_retrieval_log(
     bot_id: uuid.UUID,
     conversation_id: uuid.UUID,
     query: str,
-    rows: list[RetrievalRow],
+    result: RetrievalResult,
     retrieval_threshold: float,
     retrieval_k: int,
     embedding_configuration_id: uuid.UUID,
@@ -177,9 +181,11 @@ async def _persist_retrieval_log(
     message_id: uuid.UUID | None = None,
     reranker_used: bool = False,
 ) -> None:
-    document_ids = [document.id for _, document, _ in rows]
-    # pgvector cosine_distance is 1 - cosine_similarity for normalized vectors.
-    similarity_scores = [1.0 - distance for _, _, distance in rows]
+    candidates = result.diagnostics.get("candidates", [])
+    document_ids = [uuid.UUID(item["document_id"]) for item in candidates]
+    # Keyword-only candidates have no cosine similarity; retain NULL alignment.
+    similarity_scores = [item["semantic_score"] for item in candidates]
+    bundle = result.context_bundle
     async with create_async_chat_db_session() as chat_db:
         chat_db.add(
             RetrievalLogs(
@@ -197,6 +203,22 @@ async def _persist_retrieval_log(
                 embedding_configuration_id=embedding_configuration_id,
                 llm_configuration_id=llm_configuration_id,
                 reranked_document_ids=None,
+                details={
+                    "status": result.status.value,
+                    "prepared_query": result.prepared_query.model_dump(mode="json"),
+                    "diagnostics": result.diagnostics,
+                    "selected_document_ids": [
+                        str(item.candidate.document_id)
+                        for item in bundle.selected_candidates
+                    ]
+                    if bundle
+                    else [],
+                    "source_references": [
+                        ref.model_dump(mode="json") for ref in bundle.source_references
+                    ]
+                    if bundle
+                    else [],
+                },
             )
         )
         await chat_db.commit()
@@ -208,7 +230,7 @@ async def log_retrieval(
     bot_id: uuid.UUID,
     conversation_id: uuid.UUID,
     query: str,
-    rows: list[RetrievalRow],
+    result: RetrievalResult,
     retrieval_threshold: float,
     retrieval_k: int,
     embedding_configuration_id: uuid.UUID,
@@ -222,7 +244,7 @@ async def log_retrieval(
             bot_id=bot_id,
             conversation_id=conversation_id,
             query=query,
-            rows=rows,
+            result=result,
             retrieval_threshold=retrieval_threshold,
             retrieval_k=retrieval_k,
             embedding_configuration_id=embedding_configuration_id,
@@ -286,6 +308,29 @@ async def send_to_end_user(
     )
 
 
+async def _retrieval_history(
+    agent: Any, config: RunnableConfig
+) -> list[ConversationTurn]:
+    try:
+        snapshot = await agent.aget_state(config)
+        turns: list[ConversationTurn] = []
+        for message in snapshot.values.get("messages", []):
+            role = getattr(message, "type", None)
+            if role not in {"human", "ai"}:
+                continue
+            content = _extract_message_text(message)
+            if content:
+                turns.append(
+                    ConversationTurn(
+                        role="user" if role == "human" else "assistant", content=content
+                    )
+                )
+        return turns
+    except Exception:
+        logger.exception("Conversation history unavailable for query preparation")
+        return []
+
+
 async def respond_with_ai(
     message_data: dict[str, Any],
     bot_pref: dict[str, Any],
@@ -304,49 +349,71 @@ async def respond_with_ai(
             config: RunnableConfig = {
                 "configurable": {"thread_id": session.conversation_id}
             }
-            # Retrieve RAG context from the database
-            query_vector = await asyncio.to_thread(
-                embed_query,
-                user_text,
-                bot_pref["embedding_model"],
-                int(bot_pref["embedding_dimension"]),
-            )
             bot_id = uuid.UUID(str(bot_pref["bot_id"]))
             embedding_configuration_id = uuid.UUID(
                 str(bot_pref["embedding_configuration_id"])
             )
-            retrieval_k = int(bot_pref["retrieval_k"])
-            retrieval_threshold = float(bot_pref["similarity_threshold"])
-            llm_configuration_id = (
-                uuid.UUID(str(bot_pref["bot_configuration_id"]))
-                if bot_pref.get("bot_configuration_id")
-                else None
+            llm_configuration_id = uuid.UUID(str(bot_pref["bot_configuration_id"]))
+            # Read the checkpoint BEFORE adding the current request. This excludes
+            # later messages already queued/persisted by the WebSocket reader.
+            history = await _retrieval_history(agent, config)
+            request = RetrievalRequest(
+                original_message=user_text,
+                organization_id=session.organization_id,
+                bot_id=bot_id,
+                embedding_configuration_id=embedding_configuration_id,
+                bot_configuration_id=llm_configuration_id,
+                scoped_conversation_history=history,
             )
-
-            async with create_async_chat_db_session() as chat_db:
-                rows = await retrieve_closest_embeddings_async(
-                    chat_db,
-                    query_vector,
-                    bot_id,
-                    embedding_configuration_id,
-                    k=retrieval_k,
-                    threshold=retrieval_threshold,
+            try:
+                async with create_async_chat_db_session() as chat_db:
+                    retrieval = await RetrievalPipeline(chat_db).retrieve(request)
+            except Exception as error:
+                logger.exception(
+                    "Hybrid retrieval unavailable",
+                    extra={"conversation_id": session.conversation_id},
                 )
-                rag_context = "\n\n".join(
-                    document.content for _, document, _ in rows if document.content
+                # Keep counsellor requests and non-factual conversation available.
+                retrieval = RetrievalResult(
+                    status=RetrievalResultStatus.UNAVAILABLE,
+                    prepared_query=PreparedQuery(
+                        original_message=user_text,
+                        standalone_query=user_text,
+                        did_rewrite=False,
+                    ),
+                    diagnostics={
+                        "error": {
+                            "code": error.code
+                            if isinstance(error, RetrievalFailure)
+                            else "retrieval_unavailable",
+                            "stage": error.stage
+                            if isinstance(error, RetrievalFailure)
+                            else "retrieval",
+                            "message": error.message
+                            if isinstance(error, RetrievalFailure)
+                            else "Reference information could not be searched. Please try again shortly.",
+                            "action": "Retry the request or contact a counsellor.",
+                        }
+                    },
                 )
-
+            bundle = retrieval.context_bundle
+            has_evidence = bool(bundle and bundle.selected_candidates)
             await log_retrieval(
                 organization_id=session.organization_id,
                 bot_id=bot_id,
                 conversation_id=uuid.UUID(str(session.conversation_id)),
-                query=user_text,
-                rows=rows,
-                retrieval_threshold=retrieval_threshold,
-                retrieval_k=retrieval_k,
+                query=retrieval.prepared_query.standalone_query,
+                result=retrieval,
+                retrieval_threshold=float(
+                    retrieval.diagnostics.get(
+                        "similarity_threshold", bot_pref["similarity_threshold"]
+                    )
+                ),
+                retrieval_k=int(
+                    retrieval.diagnostics.get("retrieval_k", bot_pref["retrieval_k"])
+                ),
                 embedding_configuration_id=embedding_configuration_id,
                 llm_configuration_id=llm_configuration_id,
-                reranker_used=False,
             )
 
             logger.info(
@@ -354,7 +421,7 @@ async def respond_with_ai(
                 extra={
                     "conversation_id": str(session.conversation_id),
                     "message_length": len(user_text),
-                    "has_rag_context": bool(rag_context.strip()),
+                    "has_rag_context": has_evidence,
                 },
             )
             response = await agent.ainvoke(
@@ -362,7 +429,7 @@ async def respond_with_ai(
                 config=config,
                 context=InstituteContext(
                     bot_prefs=bot_pref,
-                    rag_context=rag_context,
+                    retrieval_result=retrieval,
                     conversation_id=uuid.UUID(str(session.conversation_id)),
                 ),
             )
@@ -382,12 +449,13 @@ async def respond_with_ai(
                     "tool_calls": tool_calls,
                 },
             )
-            last_message = response["messages"][-1]
+            last_message = response_messages[-1] if response_messages else None
             answer = _extract_message_text(last_message)
             if not answer:
                 fallback = (
                     INSUFFICIENT_CONTEXT_MESSAGE
-                    if not rag_context.strip()
+                    if not has_evidence
+                    and retrieval.status != RetrievalResultStatus.UNAVAILABLE
                     else EMPTY_AGENT_RESPONSE_ERROR
                 )
                 logger.warning(
@@ -395,13 +463,15 @@ async def respond_with_ai(
                     extra={
                         "conversation_id": session.conversation_id,
                         "message_type": type(last_message).__name__,
-                        "had_rag_context": bool(rag_context.strip()),
+                        "had_rag_context": has_evidence,
                     },
                 )
                 await send_to_end_user(
                     {
                         "type": "message",
                         "message": fallback,
+                        "retrieval_status": retrieval.status.value,
+                        "sources": [],
                         "role": "ai",
                         "conversation_id": session.conversation_id,
                     },
@@ -413,6 +483,12 @@ async def respond_with_ai(
                 {
                     "type": "message",
                     "message": answer,
+                    "retrieval_status": retrieval.status.value,
+                    "sources": [
+                        ref.model_dump(mode="json") for ref in bundle.source_references
+                    ]
+                    if bundle
+                    else [],
                     "role": "ai",
                     "conversation_id": session.conversation_id,
                 },

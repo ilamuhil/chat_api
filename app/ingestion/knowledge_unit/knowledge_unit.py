@@ -6,8 +6,8 @@ from enum import StrEnum
 from typing import Any, Literal, NotRequired, TypedDict
 from uuid import UUID
 
-from app.helpers.rag import count_tokens
 from app.models.chat_db_models import Documents
+from app.rag.embeddings import count_tokens
 
 
 class SourceType(StrEnum):

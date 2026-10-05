@@ -222,9 +222,14 @@ class TrainingJobs(Base):
     bot_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     # queued, processing, completed, failed, cleanup_completed
     status: Mapped[str] = mapped_column(Text, nullable=False)
+    source_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'")
+    )
     started_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
     completed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
-    error_message: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'")
+    )
     embedding_configuration_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
         nullable=False,
@@ -282,13 +287,14 @@ class RetrievalLogs(Base):
         message_id: Message that triggered retrieval.
         query: Query sent to retrieval.
         retrieved_document_ids: Documents returned by retrieval.
-        similarity_scores: Scores aligned with retrieved documents.
+        similarity_scores: Cosine scores aligned with retrieved documents; NULL for keyword-only matches.
         retrieval_threshold: Minimum similarity threshold.
         retrieval_k: Maximum number of retrieved documents.
         reranker_used: Whether reranking was applied.
         embedding_configuration_id: Embedding configuration used.
         llm_configuration_id: Bot/LLM configuration used.
-        reranked_document_ids: Documents after reranking.
+        reranked_document_ids: Documents after an optional reranker.
+        details: Hybrid scores, prepared query, evidence selection and source references.
         created_at: Creation timestamp.
     """
 
@@ -314,8 +320,10 @@ class RetrievalLogs(Base):
     message_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     query: Mapped[str | None] = mapped_column(Text)
     retrieved_document_ids: Mapped[list[uuid.UUID] | None] = mapped_column(ARRAY(Uuid))
-    # Cosine similarities (1 - cosine_distance), aligned with retrieved_document_ids.
-    similarity_scores: Mapped[list[float] | None] = mapped_column(ARRAY(Double(53)))
+    # Cosine similarities aligned with retrieved_document_ids; NULL for keyword-only matches.
+    similarity_scores: Mapped[list[float | None] | None] = mapped_column(
+        ARRAY(Double(53))
+    )
     retrieval_threshold: Mapped[float | None] = mapped_column(Double(53))
     retrieval_k: Mapped[int | None] = mapped_column(Integer)
     reranker_used: Mapped[bool | None] = mapped_column(
@@ -324,6 +332,9 @@ class RetrievalLogs(Base):
     embedding_configuration_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     llm_configuration_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     reranked_document_ids: Mapped[list[uuid.UUID] | None] = mapped_column(ARRAY(Uuid))
+    details: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     created_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(True), server_default=text("now()")
     )
@@ -392,7 +403,7 @@ class EmbeddingConfigurations(Base):
             name="embedding_config_dimension_positive",
         ),
         CheckConstraint(
-            "state IN ('draft', 'training', 'active', 'failed', 'deprecated')",
+            "state IN ('draft', 'training', 'active', 'deprecated')",
             name="embedding_config_state_valid",
         ),
         CheckConstraint(
@@ -467,7 +478,7 @@ class BotConfigurations(Base):
             name="bot_config_similarity_threshold_range",
         ),
         CheckConstraint(
-            "state IN ('draft', 'training', 'active', 'failed', 'deprecated')",
+            "state IN ('draft', 'training', 'active', 'deprecated')",
             name="bot_config_state_valid",
         ),
         Index(

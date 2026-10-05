@@ -688,7 +688,9 @@ class TrainingSources(Base):
     )
     type: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str | None] = mapped_column(Text)
-    error_message: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'")
+    )
     source_value: Mapped[str | None] = mapped_column(Text)
     content_hash: Mapped[str | None] = mapped_column(Text)
     original_filename: Mapped[str | None] = mapped_column(Text)

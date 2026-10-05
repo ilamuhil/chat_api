@@ -31,6 +31,15 @@ class HtmlIngestionPipeline:
 
     def run(self, url: str) -> list[KnowledgeUnit]:
         html = self.html_extractor.extract(url)
+        units = self.parse_html(html)
+        for unit in units:
+            unit.metadata.setdefault("source", {})["url"] = url
+        return units
+
+    def parse_html(
+        self, html: str, *, filename: str | None = None
+    ) -> list[KnowledgeUnit]:
+        """Use the same cleaner and parser for fetched pages and uploaded HTML."""
         root, page_meta = self.html_cleaner.clean(html)
         if not root:
             raise ValueError("Minimum content requirement of 200 characters not met")
@@ -39,4 +48,6 @@ class HtmlIngestionPipeline:
         parser = self.markdown_unit_parser
         if parser is None:
             raise RuntimeError("Markdown unit parser was not initialized.")
-        return parser.parse(markdown, SourceType.HTML, page_meta)
+        return parser.parse(
+            markdown, SourceType.HTML, page_meta, source_filename=filename
+        )

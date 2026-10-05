@@ -5,6 +5,16 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+class RetrievalFailure(ValueError):
+    """A safe, structured retrieval failure suitable for audit storage."""
+
+    def __init__(self, code: str, stage: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.stage = stage
+        self.message = message
+
+
 class RetrievalResultStatus(StrEnum):
     """Status of the retrieval pipeline result.
 
@@ -12,8 +22,10 @@ class RetrievalResultStatus(StrEnum):
         READY: Retrieval completed with usable evidence.
         NEEDS_CLARIFICATION: The user query needs clarification.
         NO_EVIDENCE: Retrieval found no suitable evidence.
+        UNAVAILABLE: Retrieval could not search the configured reference information.
     """
 
+    UNAVAILABLE = "unavailable"
     READY = "ready"
     NEEDS_CLARIFICATION = "needs_clarification"
     NO_EVIDENCE = "no_evidence"
@@ -46,6 +58,7 @@ class SourceReference(BaseModel):
 
     source_id: UUID = Field(..., description="The id of the source of the document.")
     document_id: UUID = Field(..., description="The id of the document.")
+    citation_number: int = Field(..., gt=0)
     label: str = Field(..., description="The label of the source reference.")
     page: int | None = Field(
         default=None, description="The page number of the source reference."
@@ -70,6 +83,7 @@ class PreparedQuery(BaseModel):
     standalone_query: str = Field(
         ..., description="The standalone query to be used for RAG retrieval."
     )
+    fallback_reason: str | None = None
     did_rewrite: bool = Field(
         ..., description="Whether the message was rewritten by the system."
     )
@@ -100,6 +114,7 @@ class RetrievalRequest(BaseModel):
         ...,
         description="The id of the embedding configuration to be used for RAG retrieval.",
     )
+    bot_configuration_id: UUID | None = None
     scoped_conversation_history: list[ConversationTurn] = Field(
         ...,
         description="The scoped conversation history to be used for RAG retrieval.",
