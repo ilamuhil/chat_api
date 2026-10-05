@@ -64,7 +64,7 @@ class KnowledgeUnitCleanerTests(unittest.TestCase):
         assert cleaned is not None
         self.assertEqual(cleaned.content, "Admissions information")
         self.assertEqual(
-            cleaned.metadata["source"],
+            cleaned.metadata.get("source"),
             {"canonical_url": "https://example.edu/admissions"},
         )
         self.assertNotIn("token_count", cleaned.metadata)
