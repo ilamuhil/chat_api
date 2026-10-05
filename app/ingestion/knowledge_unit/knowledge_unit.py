@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal, NotRequired, TypedDict
+from uuid import UUID
+
+from app.helpers.rag import count_tokens
+from app.models.chat_db_models import Documents
 
 
 class SourceType(StrEnum):
@@ -87,6 +92,10 @@ class KnowledgeUnitMetadata(TypedDict, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
+def _empty_metadata() -> KnowledgeUnitMetadata:
+    return {}
+
+
 class WeakReason(StrEnum):
     SHORT = "short"
     BROKEN_SENTENCE = "broken_sentence"
@@ -115,7 +124,7 @@ class ChunkingConfig:
 class KnowledgeUnit:
     source_type: SourceType
     content: str = ""
-    metadata: KnowledgeUnitMetadata = field(default_factory=dict)
+    metadata: KnowledgeUnitMetadata = field(default_factory=_empty_metadata)
     source_order: int = 0
 
     @property
@@ -172,3 +181,34 @@ class KnowledgeUnit:
         return KnowledgeUnitProcessor(embedding_model, chunking_config).process(
             knowledge_units
         )
+
+    @staticmethod
+    def to_documents_adapter(
+        knowledge_units: list[KnowledgeUnit],
+        *,
+        organization_id: str,
+        bot_id: UUID,
+        source_id: UUID,
+        embedding_configuration_id: UUID,
+        embedding_model: str,
+    ) -> list[Documents]:
+        """Convert processed knowledge units into inactive document rows."""
+        documents = []
+        for unit in knowledge_units:
+            heading = " > ".join(unit.heading_paths)
+            content = f"{heading}\n\n{unit.content}" if heading else unit.content
+
+            documents.append(
+                Documents(
+                    organization_id=organization_id,
+                    bot_id=bot_id,
+                    source_id=source_id,
+                    embedding_configuration_id=embedding_configuration_id,
+                    chunk_index=unit.source_order,
+                    content=content,
+                    token_count=count_tokens(content, embedding_model),
+                    is_active=False,
+                    metadata_json=deepcopy(unit.metadata),
+                )
+            )
+        return documents
