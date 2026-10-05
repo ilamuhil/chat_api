@@ -32,32 +32,25 @@ async def get_messages(
             )
         conversation_uuid = uuid.UUID(conversation_id)
 
-        results = await db.execute(
-            select(
-                Messages.id,
-                Messages.conversation_id,
-                Messages.created_at,
-                Messages.agent_id,
-                Messages.content_type,
-                Messages.content,
-                Messages.role,
-            )
+        messages_result = await db.scalars(
+            select(Messages)
             .where(Messages.conversation_id == conversation_uuid)
             .order_by(Messages.created_at.asc())
             .limit(50)
-        ).all()
-
+        )
         messages = [
             {
-                "id": str(row.id),
-                "conversation_id": str(row.conversation_id),
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-                "agent_id": str(row.agent_id) if row.agent_id else None,
-                "content_type": row.content_type,
-                "content": row.content,
-                "role": row.role,
+                "id": str(message.id),
+                "conversation_id": str(message.conversation_id),
+                "created_at": message.created_at.isoformat()
+                if message.created_at
+                else None,
+                "agent_id": str(message.agent_id) if message.agent_id else None,
+                "content_type": message.content_type,
+                "content": message.content,
+                "role": message.role,
             }
-            for row in results
+            for message in messages_result.all()
         ]
         return JSONResponse(content={"messages": messages}, status_code=200)
     except HTTPException:
