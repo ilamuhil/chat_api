@@ -171,7 +171,9 @@ async def chat(websocket: WebSocket):
 
                 if msg_type == "typing":
                     is_typing = bool(message_data.get("is_typing", False))
-                    await send_typing_to_support_agent(session, is_typing)
+                    await send_typing_to_support_agent(
+                        session, is_typing, actor="user"
+                    )
                     continue
 
                 elif msg_type == "file":
@@ -220,7 +222,9 @@ async def chat(websocket: WebSocket):
             elif websocket == session.agent_socket:
                 if msg_type == "typing":
                     is_typing = bool(message_data.get("is_typing", False))
-                    await send_typing_to_end_user(session, is_typing)
+                    await send_typing_to_end_user(
+                        session, is_typing, actor="support_agent"
+                    )
                     continue
                 # Clear any lingering agent typing indicator before the message.
                 await send_typing_to_end_user(session, False)

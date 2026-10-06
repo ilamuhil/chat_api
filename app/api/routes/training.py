@@ -328,7 +328,7 @@ async def training_job_status(
     }
 
 
-@router.delete("/api/training/delete/{source_id}")
+@router.delete("/training/delete/{source_id}")
 async def delete_training_source(
     source_id: uuid.UUID,
     request: Request,
