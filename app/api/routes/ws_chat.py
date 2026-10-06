@@ -117,7 +117,9 @@ async def chat(websocket: WebSocket):
                 )
                 if conversation is not None and conversation.status == "closed":
                     await end_chat_session(
-                        session, closed_by="system", already_closed=True
+                        session,
+                        closed_by=conversation.closed_by or "system",
+                        already_closed=True,
                     )
                     break
             except Exception:
@@ -134,7 +136,7 @@ async def chat(websocket: WebSocket):
                 await websocket.send_json({"type": "pong"})
                 continue
             elif msg_type == "end_chat":
-                await end_chat_session(session)
+                await end_chat_session(session, closed_by="visitor")
                 break
 
             logger.debug("WebSocket message received", extra={"type": msg_type})

@@ -375,6 +375,14 @@ async def handle_form_capture(
     return False
 
 
+def _agent_end_chat_message(closed_by: str | None) -> str:
+    if closed_by in {"support_agent", "agent", "admin"}:
+        return "Chat ended by support_agent"
+    if closed_by in {"visitor", "user"}:
+        return "Chat ended by user"
+    return "Chat ended"
+
+
 async def end_chat_session(
     session: ChatSession, closed_by: str | None = "system", already_closed: bool = False
 ) -> None:
@@ -391,7 +399,11 @@ async def end_chat_session(
             )
     if session.agent_socket:
         await session.agent_socket.send_json(
-            {"type": "end_chat", "message": "Chat ended by user"}
+            {
+                "type": "end_chat",
+                "closed_by": closed_by,
+                "message": _agent_end_chat_message(closed_by),
+            }
         )
         await session.agent_socket.close(
             code=1000,
@@ -401,7 +413,11 @@ async def end_chat_session(
         )
     if session.user_socket:
         await session.user_socket.send_json(
-            {"type": "end_chat", "message": "Chat ended"}
+            {
+                "type": "end_chat",
+                "message": "Chat ended",
+                "conversation_id": session.conversation_id,
+            }
         )
         await session.user_socket.close(
             code=1000,

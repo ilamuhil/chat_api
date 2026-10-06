@@ -7,6 +7,11 @@ from fastapi import WebSocket
 
 from app.core.jwt import verify_token
 from app.domain import ChatSession
+from app.ws.agent_tool_api import (
+    get_conversation,
+    publish_assistance_status,
+    update_conversation_handover_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +127,24 @@ async def authenticate_socket(
             return None
 
         session.agent_connect(websocket)
+        try:
+            conversation_uuid = uuid.UUID(conversation_id)
+            conversation = await get_conversation(conversation_uuid)
+            if (
+                conversation is not None
+                and conversation.handover_status == "requested"
+            ):
+                await publish_assistance_status(conversation_id, "connected")
+                # Accepted requests must not later time out as unanswered.
+                await update_conversation_handover_status(
+                    conversation_uuid,
+                    "accepted",
+                )
+        except Exception:
+            logger.exception(
+                "Failed to finish counsellor handover",
+                extra={"conversation_id": conversation_id},
+            )
         return session, bot_id
 
     await websocket.close(code=1008, reason="Invalid type")
