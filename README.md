@@ -110,7 +110,11 @@ Create a `.env.local` file (or `.env` for production) with the following variabl
 | `SECRET_ACCESS_KEY` | R2 secret access key | `xxxxxxxx` |
 | `CLOUDFLARE_R2_BASE_URL` | (Optional) public base URL for objects | `https://pub-....r2.dev` |
 | `R2_API_KEY_TOKEN` | (Optional) Cloudflare API token (not used by S3 client) | `xxxxxxxx` |
-| `LOG_LEVEL` | Logging level | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `LOG_LEVEL` | Minimum level for console and what the app emits | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `LOG_DIR` | (Optional) Base directory for file logs | `logs` |
+| `DEBUG_LOG_DIR` | (Optional) DEBUG-only rotating files | `logs/debug_logs` |
+| `INFO_LOG_DIR` | (Optional) INFO and WARNING files | `logs/info_logs` |
+| `ERROR_LOG_DIR` | (Optional) ERROR, CRITICAL, and exceptions | `logs/error_logs` |
 | `REDIS_URL` | Redis connection URL | `redis://redis:6379/0` (Docker) or `redis://localhost:6379/0` (local) |
 
 **Note**: In Docker Compose, use `redis://redis:6379/0` where `redis` resolves to the Redis container hostname. For production, use your managed Redis service URL.
@@ -433,11 +437,15 @@ uv run alembic -c alembic/alembic.ini history
 
 ## Logging
 
-Logs are written to:
-- **Console**: Pretty-printed JSON format (development)
-- **File**: `logs/app.log` - Timed rotating log file
+`LOG_LEVEL` sets how verbose the process is (console + which records are created). File handlers split output by severity:
 
-Log level is controlled by the `LOG_LEVEL` environment variable.
+| Directory | File | Levels |
+|-----------|------|--------|
+| `logs/debug_logs/` | `debug.log` | `DEBUG` only |
+| `logs/info_logs/` | `app.log` | `INFO`, `WARNING` |
+| `logs/error_logs/` | `error.log` | `ERROR`, `CRITICAL`, and `logger.exception()` tracebacks |
+
+Override with `LOG_DIR` (base) or the per-level `*_LOG_DIR` variables. Directories are created on startup; `logs/` is gitignored.
 
 ## Production Deployment
 

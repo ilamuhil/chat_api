@@ -198,12 +198,14 @@ async def chat(websocket: WebSocket):
                     "content"
                 )
                 if user_content:
-                    await log_message(
+                    message_id = await log_message(
                         session.conversation_id,
                         "user",
                         str(user_content),
                         "text",
                     )
+                    if message_id is not None:
+                        message_data["message_id"] = str(message_id)
 
                 if session.mode == "human":
                     await send_typing_to_support_agent(session, False)

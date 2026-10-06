@@ -96,15 +96,16 @@ async def _persist_message(
     role: MessageRole,
     content: str,
     content_type: ContentType,
-) -> None:
+) -> uuid.UUID:
     now = datetime.now(UTC)
+    message_id = uuid.uuid4()
     async with (
         create_async_chat_db_session() as chat_db,
         create_async_dashboard_db_session() as dashboard_db,
     ):
         chat_db.add(
             Messages(
-                id=uuid.uuid4(),
+                id=message_id,
                 conversation_id=uuid.UUID(str(conversation_id)),
                 role=role,
                 content_type=content_type,
@@ -140,6 +141,7 @@ async def _persist_message(
                 "Failed to update conversation metadata in Redis",
                 extra={"conversation_id": conversation_id},
             )
+    return message_id
 
 
 async def log_message(
@@ -147,9 +149,9 @@ async def log_message(
     role: MessageRole,
     content: str,
     content_type: ContentType = "text",
-) -> None:
+) -> uuid.UUID | None:
     try:
-        await _persist_message(
+        return await _persist_message(
             conversation_id,
             role,
             content,
@@ -165,6 +167,7 @@ async def log_message(
                 "content_type": content_type,
             },
         )
+        return None
 
 
 async def _persist_retrieval_log(
@@ -354,6 +357,20 @@ async def respond_with_ai(
                 str(bot_pref["embedding_configuration_id"])
             )
             llm_configuration_id = uuid.UUID(str(bot_pref["bot_configuration_id"]))
+            raw_message_id = (
+                message_data.get("message_id")
+                if isinstance(message_data, dict)
+                else None
+            )
+            message_id = None
+            if raw_message_id:
+                try:
+                    message_id = uuid.UUID(str(raw_message_id))
+                except ValueError:
+                    logger.warning(
+                        "Ignoring invalid retrieval message id",
+                        extra={"message_id": raw_message_id},
+                    )
             # Read the checkpoint BEFORE adding the current request. This excludes
             # later messages already queued/persisted by the WebSocket reader.
             history = await _retrieval_history(agent, config)
@@ -381,6 +398,8 @@ async def respond_with_ai(
                         standalone_query=user_text,
                         did_rewrite=False,
                     ),
+                    context_bundle=None,
+                    clarification_question=None,
                     diagnostics={
                         "error": {
                             "code": error.code
@@ -414,6 +433,7 @@ async def respond_with_ai(
                 ),
                 embedding_configuration_id=embedding_configuration_id,
                 llm_configuration_id=llm_configuration_id,
+                message_id=message_id,
             )
 
             logger.info(

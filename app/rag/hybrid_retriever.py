@@ -1,4 +1,5 @@
 import logging
+import re
 
 from langchain_openai import OpenAIEmbeddings
 from pydantic import BaseModel
@@ -19,6 +20,200 @@ from app.rag.shared_dataclasses import (
 logger = logging.getLogger(__name__)
 
 
+VOCABULARY_RULES = (
+    {
+        "intent": "admission_process",
+        "triggers": (
+            "sign up",
+            "signup",
+            "register for",
+            "apply for",
+            "application process",
+            "admission process",
+            "application and enrolment process",
+            "application and enrollment process",
+            "enroll in",
+            "enrol in",
+            "secure a place",
+            "secure a seat",
+            "get admitted",
+            "join the course",
+            "join the batch",
+        ),
+        "match_groups": (),
+        "expand_with": (
+            "application",
+            "admissions",
+            "apply",
+            "enrolment",
+            "enrollment",
+            "registration",
+            "counselling",
+            "counseling",
+            "offer",
+            "seat reservation",
+        ),
+    },
+    {
+        "intent": "application_documents",
+        "triggers": (
+            "required documents",
+            "documents required",
+            "which documents",
+            "what documents",
+            "paperwork",
+            "upload documents",
+            "submit documents",
+            "supporting documents",
+        ),
+        # Also catches phrasings such as “Which exact documents must I upload?”
+        "match_groups": (
+            ("document", "documents", "paperwork"),
+            ("upload", "submit", "provide", "send", "need", "required"),
+        ),
+        "expand_with": (
+            "application documents",
+            "admission documents",
+            "upload",
+            "submit",
+            "marksheet",
+            "completion certificate",
+            "identity document",
+        ),
+    },
+    {
+        "intent": "eligibility",
+        "triggers": (
+            "am i eligible",
+            "eligibility criteria",
+            "entry requirements",
+            "prerequisites",
+            "qualify for",
+            "can i apply",
+        ),
+        "match_groups": (),
+        "expand_with": (
+            "eligibility",
+            "entry criteria",
+            "admission requirements",
+            "prerequisites",
+        ),
+    },
+    {
+        "intent": "fees_and_payment",
+        "triggers": (
+            "course fee",
+            "tuition fee",
+            "how much does it cost",
+            "payment plan",
+            "monthly installment",
+            "monthly instalment",
+            "emi",
+            "seat reservation payment",
+            "reservation fee",
+            "seat reservation amount",
+        ),
+        "match_groups": (),
+        "expand_with": (
+            "total fee",
+            "net fee",
+            "payment plan",
+            "instalment",
+            "installment",
+            "reservation amount",
+            "seat reservation",
+        ),
+    },
+    {
+        "intent": "application_fee",
+        "triggers": (
+            "application fee",
+            "fee to apply",
+            "cost to apply",
+            "is applying free",
+            "charges for applying",
+        ),
+        "match_groups": (),
+        "expand_with": (
+            "application fee",
+            "application charge",
+            "fee to apply",
+        ),
+    },
+    {
+        "intent": "scholarship",
+        "triggers": (
+            "financial aid",
+            "scholarship",
+            "fee reduction",
+            "discount on the fee",
+            "reduce the course fee",
+        ),
+        "match_groups": (),
+        "expand_with": (
+            "scholarship eligibility",
+            "scholarship application",
+            "award",
+            "fee reduction",
+        ),
+    },
+    {
+        "intent": "intake_and_schedule",
+        "triggers": (
+            "when does the course start",
+            "when do classes start",
+            "application deadline",
+            "last date to apply",
+            "orientation date",
+            "class schedule",
+            "learning mode",
+        ),
+        "match_groups": (),
+        "expand_with": (
+            "intake",
+            "application deadline",
+            "orientation",
+            "first class",
+            "campus schedule",
+            "online schedule",
+        ),
+    },
+)
+
+
+def _normalize_for_matching(text: str) -> str:
+    """Lowercase text and turn punctuation into spaces for phrase matching."""
+    return " ".join(re.findall(r"\w+", text.casefold()))
+
+
+def _contains_phrase(normalized_text: str, phrase: str) -> bool:
+    normalized_phrase = _normalize_for_matching(phrase)
+    return f" {normalized_phrase} " in f" {normalized_text} "
+
+
+def expand_keyword_query(query: str) -> tuple[list[str], list[str]]:
+    """Return matched intent names and their deduplicated expansion terms."""
+    normalized_query = _normalize_for_matching(query)
+    matched_intents: list[str] = []
+    expansion_terms: list[str] = []
+
+    for rule in VOCABULARY_RULES:
+        direct_match = any(
+            _contains_phrase(normalized_query, phrase) for phrase in rule["triggers"]
+        )
+        grouped_match = bool(rule["match_groups"]) and all(
+            any(_contains_phrase(normalized_query, term) for term in group)
+            for group in rule["match_groups"]
+        )
+
+        if direct_match or grouped_match:
+            matched_intents.append(rule["intent"])
+            expansion_terms.extend(rule["expand_with"])
+
+    # Preserve order while removing duplicates.
+    return matched_intents, list(dict.fromkeys(expansion_terms))
+
+
 class HybridRetriever(BaseModel):
     async def keyword_search(
         self,
@@ -35,7 +230,20 @@ class HybridRetriever(BaseModel):
             raise ValueError("Search limit must be positive.")
         # PostgreSQL parses and escapes terms; joining lexemes with OR preserves
         # exact program names/codes without requiring every word of a question.
-        lexemes = func.tsvector_to_array(func.to_tsvector("english", query))
+        matched_intents, expansion_terms = expand_keyword_query(query)
+        keyword_query_text = " ".join((query, *expansion_terms))
+
+        logger.debug(
+            "Expanded keyword search query",
+            extra={
+                "matched_intents": matched_intents,
+                "expansion_terms": expansion_terms,
+            },
+        )
+
+        lexemes = func.tsvector_to_array(
+            func.to_tsvector("english", keyword_query_text)
+        )
         terms = func.unnest(lexemes).table_valued("lexeme").render_derived()
         expression = select(
             func.string_agg(func.quote_literal(terms.c.lexeme), " | ")
@@ -131,7 +339,6 @@ class HybridRetriever(BaseModel):
         )
 
         distance = Embeddings.embedding.cosine_distance(query_embedding)
-        max_distance = 1.0 - similarity_threshold
 
         statement = (
             select(Documents, distance.label("distance"))
@@ -143,7 +350,6 @@ class HybridRetriever(BaseModel):
                 Documents.is_active.is_(True),
                 Documents.deleted_at.is_(None),
                 Embeddings.deleted_at.is_(None),
-                distance <= max_distance,
             )
             .order_by(distance, Documents.chunk_index, Documents.id)
             .limit(limit)
@@ -162,6 +368,27 @@ class HybridRetriever(BaseModel):
                 "semantic_search",
                 "Semantic reference search is temporarily unavailable. Please try again shortly.",
             ) from error
+        scored_rows = [
+            (document, 1.0 - float(distance_value)) for document, distance_value in rows
+        ]
+
+        logger.info(
+            "Semantic search score diagnostics",
+            extra={
+                "threshold": similarity_threshold,
+                "top_scores": [
+                    {
+                        "document_id": str(document.id),
+                        "score": score,
+                        "passed": score >= similarity_threshold,
+                    }
+                    for document, score in scored_rows[:5]
+                ],
+                "returned_count": sum(
+                    score >= similarity_threshold for _, score in scored_rows
+                ),
+            },
+        )
 
         return [
             RetrievalCandidate(
@@ -169,8 +396,11 @@ class HybridRetriever(BaseModel):
                 source_id=document.source_id,
                 content=document.content or "",
                 metadata=document.metadata_json or {},
-                semantic_score=1.0 - float(distance_value),
+                semantic_score=score,
                 semantic_rank=rank,
             )
-            for rank, (document, distance_value) in enumerate(rows, start=1)
+            for rank, (document, score) in enumerate(
+                (row for row in scored_rows if row[1] >= similarity_threshold),
+                start=1,
+            )
         ]

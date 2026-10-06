@@ -437,6 +437,7 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 else {"messages": []}
             ),
         )
+        message_id = uuid.uuid4()
         with (
             patch("app.services.chat.create_async_chat_db_session") as factory,
             patch.object(RetrievalPipeline, "retrieve", AsyncMock()) as retrieve,
@@ -449,7 +450,13 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 retrieve.side_effect = retrieval
             else:
                 retrieve.return_value = retrieval
-            await respond_with_ai({"message": "And fees?"}, prefs, session, agent)
+            await respond_with_ai(
+                {"message": "And fees?", "message_id": str(message_id)},
+                prefs,
+                session,
+                agent,
+            )
+        self.assertEqual(log.call_args.kwargs["message_id"], message_id)
         payloads = [call.args[0] for call in socket.send_json.call_args_list]
         return agent, retrieve, log, payloads
 
