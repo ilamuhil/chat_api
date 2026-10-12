@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from redis.exceptions import RedisError
 from sqlalchemy import or_, select, update
@@ -18,6 +18,8 @@ from app.infra.redis_client import redis_client
 from app.models.dashboard_db_models import ConversationsMeta
 
 logger = logging.getLogger(__name__)
+RUNTIME_EVENTS_CHANNEL = "chat_runtime_events"
+AssistanceStatus = Literal["searching", "connected", "busy"]
 
 
 async def request_conversation_handover(
@@ -116,6 +118,26 @@ async def publish_to_channel(
     )
 
 
+async def publish_assistance_status(
+    conversation_id: str,
+    status: AssistanceStatus,
+) -> None:
+    """Tell the open widget to show or hide the counsellor-search loader."""
+    published, _ = await publish_to_channel(
+        RUNTIME_EVENTS_CHANNEL,
+        {
+            "type": "assistance",
+            "status": status,
+            "conversation_id": str(conversation_id),
+        },
+    )
+    if not published:
+        logger.warning(
+            "Failed to publish assistance status",
+            extra={"conversation_id": str(conversation_id), "status": status},
+        )
+
+
 def _timeout_handover_status_sync(conversation_id: uuid.UUID) -> bool:
     with create_dashboard_db_session() as session:
         result = cast(
@@ -179,7 +201,7 @@ def agent_handover_timeout_handler(conversation_id: str) -> None:
         return
 
     published, _ = _publish_to_channel_sync(
-        "chat_runtime_events",
+        RUNTIME_EVENTS_CHANNEL,
         json.dumps(
             {
                 "type": "handover_timeout",

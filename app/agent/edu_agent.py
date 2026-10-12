@@ -29,6 +29,7 @@ from app.services.notifications import (
 from app.ws.agent_tool_api import (
     agent_handover_timeout_handler,
     get_conversation,
+    publish_assistance_status,
     request_conversation_handover,
     update_conversation_handover_status,
 )
@@ -211,6 +212,7 @@ async def agent_handover_request(
         }
 
     if conversation.handover_status == "requested":
+        await publish_assistance_status(str(conversation_id), "searching")
         return {
             "ok": True,
             "code": "HANDOVER_REQUESTED",
@@ -234,6 +236,7 @@ async def agent_handover_request(
         current = await get_conversation(conversation_id)
 
         if current is not None and current.handover_status == "requested":
+            await publish_assistance_status(str(conversation_id), "searching")
             return {
                 "ok": True,
                 "code": "HANDOVER_REQUESTED",
@@ -355,6 +358,7 @@ async def agent_handover_request(
         notifications=notifications,
     )
 
+    await publish_assistance_status(str(conversation_id), "searching")
     return {
         "ok": True,
         "code": "HANDOVER_REQUESTED",

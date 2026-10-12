@@ -64,21 +64,43 @@ def _extract_message_text(message: Any) -> str:
     return text
 
 
-def _typing_payload(session: ChatSession, is_typing: bool) -> dict[str, Any]:
-    return {
+def _typing_payload(
+    session: ChatSession,
+    is_typing: bool,
+    actor: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "type": "typing",
         "from": "system",
         "is_typing": is_typing,
         "conversation_id": session.conversation_id,
     }
+    # Keypress typing names who is typing. AI thinking leaves this off.
+    if actor:
+        payload["actor"] = actor
+    return payload
 
 
-async def send_typing_to_end_user(session: ChatSession, is_typing: bool) -> None:
-    await _send_json_safe(session.user_socket, _typing_payload(session, is_typing))
+async def send_typing_to_end_user(
+    session: ChatSession,
+    is_typing: bool,
+    *,
+    actor: str | None = None,
+) -> None:
+    await _send_json_safe(
+        session.user_socket, _typing_payload(session, is_typing, actor)
+    )
 
 
-async def send_typing_to_support_agent(session: ChatSession, is_typing: bool) -> None:
-    await _send_json_safe(session.agent_socket, _typing_payload(session, is_typing))
+async def send_typing_to_support_agent(
+    session: ChatSession,
+    is_typing: bool,
+    *,
+    actor: str | None = None,
+) -> None:
+    await _send_json_safe(
+        session.agent_socket, _typing_payload(session, is_typing, actor)
+    )
 
 
 @asynccontextmanager

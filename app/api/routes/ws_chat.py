@@ -117,7 +117,9 @@ async def chat(websocket: WebSocket):
                 )
                 if conversation is not None and conversation.status == "closed":
                     await end_chat_session(
-                        session, closed_by="system", already_closed=True
+                        session,
+                        closed_by=conversation.closed_by or "system",
+                        already_closed=True,
                     )
                     break
             except Exception:
@@ -134,7 +136,7 @@ async def chat(websocket: WebSocket):
                 await websocket.send_json({"type": "pong"})
                 continue
             elif msg_type == "end_chat":
-                await end_chat_session(session)
+                await end_chat_session(session, closed_by="visitor")
                 break
 
             logger.debug("WebSocket message received", extra={"type": msg_type})
@@ -169,7 +171,9 @@ async def chat(websocket: WebSocket):
 
                 if msg_type == "typing":
                     is_typing = bool(message_data.get("is_typing", False))
-                    await send_typing_to_support_agent(session, is_typing)
+                    await send_typing_to_support_agent(
+                        session, is_typing, actor="user"
+                    )
                     continue
 
                 elif msg_type == "file":
@@ -218,7 +222,9 @@ async def chat(websocket: WebSocket):
             elif websocket == session.agent_socket:
                 if msg_type == "typing":
                     is_typing = bool(message_data.get("is_typing", False))
-                    await send_typing_to_end_user(session, is_typing)
+                    await send_typing_to_end_user(
+                        session, is_typing, actor="support_agent"
+                    )
                     continue
                 # Clear any lingering agent typing indicator before the message.
                 await send_typing_to_end_user(session, False)
