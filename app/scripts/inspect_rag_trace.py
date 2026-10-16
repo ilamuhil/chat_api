@@ -23,10 +23,10 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from sqlalchemy import select
+from sqlalchemy import select  # noqa: E402
 
-from app.db.session import create_async_chat_db_session
-from app.models.chat_db_models import Documents, Messages, RetrievalLogs
+from app.db.session import create_async_chat_db_session  # noqa: E402
+from app.models.chat_db_models import Documents, Messages, RetrievalLogs  # noqa: E402
 
 
 def _json(value: Any) -> str:

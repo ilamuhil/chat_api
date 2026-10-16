@@ -28,18 +28,20 @@ async def create_notifications(
     title: str,
     body: str,
     metadata: dict[str, Any],
+    recipient_user_ids: list[uuid.UUID] | None = None,
 ) -> list[NotificationPayload]:
     now = datetime.datetime.now(datetime.UTC)
 
     async with create_async_dashboard_db_session() as session:
-        recipient_ids = (
-            await session.scalars(
-            select(OrganizationMembers.user_id).where(
-                OrganizationMembers.organization_id == organization_id,
-                OrganizationMembers.user_id.is_not(None),
+        recipients = select(OrganizationMembers.user_id).where(
+            OrganizationMembers.organization_id == organization_id,
+            OrganizationMembers.user_id.is_not(None),
+        )
+        if recipient_user_ids is not None:
+            recipients = recipients.where(
+                OrganizationMembers.user_id.in_(recipient_user_ids)
             )
-            )
-        ).all()
+        recipient_ids = (await session.scalars(recipients)).all()
 
         # Prevent duplicate rows if duplicate memberships exist.
         unique_recipient_ids = list(dict.fromkeys(recipient_ids))

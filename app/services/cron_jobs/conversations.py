@@ -3,12 +3,17 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import update
+from sqlalchemy import or_, update
 
 from app.config.logging_config import setup_logging
 from app.core.env import load_app_env
 from app.db.session import create_async_dashboard_db_session
 from app.models.dashboard_db_models import ConversationsMeta
+from app.services.conversation_lifecycle import (
+    enqueue_conversation_summary,
+    publish_conversation_closed,
+    queue_pending_summaries,
+)
 
 load_app_env()
 setup_logging()
@@ -26,17 +31,34 @@ async def close_stale_conversations() -> None:
                 update(ConversationsMeta)
                 .where(
                     ConversationsMeta.status == "open",
-                    ConversationsMeta.handover_status != "requested",
-                    ConversationsMeta.last_message_at < cutoff_time,
+                    or_(
+                        ConversationsMeta.handover_status != "requested",
+                        ConversationsMeta.handover_status.is_(None),
+                    ),
+                    or_(
+                        ConversationsMeta.last_message_at < cutoff_time,
+                        (ConversationsMeta.last_message_at.is_(None))
+                        & (ConversationsMeta.created_at < cutoff_time),
+                    ),
                 )
                 .values(
-                    status="closed", closed_by="system", closed_at=datetime.now(UTC)
+                    status="closed",
+                    closed_by="system",
+                    closed_at=datetime.now(UTC),
+                    summary_status="pending",
                 )
             )
-            await db.execute(update_stmnt)
+            closed_ids = list(
+                (await db.scalars(update_stmnt.returning(ConversationsMeta.id))).all()
+            )
             await db.commit()
             logger.info("Stale conversations closed by system")
+        for conversation_id in closed_ids:
+            await enqueue_conversation_summary(conversation_id)
+            await publish_conversation_closed(conversation_id, "system")
     except Exception as e:
         logger.exception(
             "Error occured while closing stale conversations", extra={"error": str(e)}
         )
+
+    await queue_pending_summaries()

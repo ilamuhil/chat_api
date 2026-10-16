@@ -34,6 +34,12 @@ def load_app_env() -> str:
     root = Path(__file__).resolve().parents[2]
     env_path = root / ".env"
     env_local_path = root / ".env.local"
+    # An explicit file supports isolated local verification without changing
+    # Docker's repository configuration or committing test credentials.
+    explicit_file = os.getenv("APP_ENV_FILE")
+    if explicit_file:
+        load_dotenv(Path(explicit_file), override=False)
+        return app_env
 
     def _safe_load(path: Path, override: bool) -> None:
         # override false => do not override values from os.environ if it is present

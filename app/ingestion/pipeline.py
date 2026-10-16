@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import zipfile
 from pathlib import Path
 
 from sqlalchemy import delete, select
@@ -17,6 +18,7 @@ from app.ingestion.txt_ingestion.txt_pipeline import TxtPipeline
 from app.models.chat_db_models import Documents, EmbeddingConfigurations
 from app.models.dashboard_db_models import Files, TrainingSources
 from app.rag.embeddings import create_embeddings
+from app.services.billing_training import finish_training, reserve_training
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +194,12 @@ class IngestionPipeline:
             with error_stage("download"):
                 r2_download_to_path(file_record.bucket, file_record.path, str(path))
             with error_stage("extraction"):
+                if path.stat().st_size > 25_000_000:
+                    raise TrainingFailure("file_too_large", "This file exceeds the supported extraction size.", retryable=False)
+                if extension == ".docx":
+                    with zipfile.ZipFile(path) as archive:
+                        if len(archive.infolist()) > 2000 or sum(item.file_size for item in archive.infolist()) > 100_000_000:
+                            raise TrainingFailure("document_too_large", "This document expands beyond the supported size. Split it into smaller documents.", retryable=False)
                 units = self._parse_file(path, filename)
 
         # CSV parsers see a temporary storage filename; keep the upload attribution.
@@ -243,6 +251,11 @@ class IngestionPipeline:
 
     def _persist_documents(self, documents: list[Documents]) -> None:
         """Replace this source/configuration atomically, including on retries."""
+        reservation, already_processed = reserve_training(
+            self.dashboard_session, self.source, self.config, documents
+        )
+        if already_processed:
+            return
         try:
             with error_stage("persistence"):
                 # Embeddings are removed by the document foreign key's ON DELETE CASCADE.
@@ -266,8 +279,10 @@ class IngestionPipeline:
                 )
             with error_stage("persistence"):
                 self.chat_session.commit()
+            finish_training(self.dashboard_session, reservation, True)
         except Exception:
             self.chat_session.rollback()
+            finish_training(self.dashboard_session, reservation, False)
             logger.exception(
                 "Failed to persist knowledge units and embeddings",
                 extra={"source_id": str(self.source.id)},

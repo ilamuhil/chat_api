@@ -38,26 +38,38 @@ class HtmlExtractor:
             "Accept": "text/html,application/xhtml+xml",
             "User-Agent": self.user_agent,
         }
+
+        def fetch(client):
+            with client.stream("GET", url, headers=headers) as response:
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "").lower()
+                if content_type and "html" not in content_type:
+                    raise ValueError(f"URL did not return HTML content: {content_type}")
+                chunks = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > 5_000_000:
+                        raise ValueError(
+                            "This page is too large. Use a single page under 5 MB."
+                        )
+                    chunks.append(chunk)
+                return b"".join(chunks).decode(
+                    response.encoding or "utf-8", errors="replace"
+                )
+
         try:
             if self._client is not None:
-                response = self._client.get(url, headers=headers)
-            else:
-                with httpx.Client(
-                    follow_redirects=True,
-                    timeout=self.timeout,
-                    headers=headers,
-                    verify=self.tls_context,
-                ) as client:
-                    response = client.get(url)
-            response.raise_for_status()
+                return fetch(self._client)
+            with httpx.Client(
+                follow_redirects=True,
+                max_redirects=5,
+                timeout=self.timeout,
+                verify=self.tls_context,
+            ) as client:
+                return fetch(client)
         except httpx.HTTPError as error:
             raise ValueError(f"Unable to fetch HTML from URL: {url}") from error
-
-        content_type = response.headers.get("content-type", "").lower()
-        if content_type and "html" not in content_type:
-            raise ValueError(f"URL did not return HTML content: {content_type}")
-
-        return response.text
 
     @staticmethod
     def _validate_url(url: str) -> None:

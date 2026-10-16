@@ -293,9 +293,23 @@ class HybridRetriever(BaseModel):
 
     async def embed_query(self, query: str, model: str, dimensions: int) -> list[float]:
         try:
+            from app.services.billing import billing_tokens, current_meter
+
             embeddings = OpenAIEmbeddings(
-                model=model, dimensions=dimensions, timeout=15, max_retries=1
+                model=model, dimensions=dimensions, timeout=15, max_retries=0
             )
+            meter = current_meter.get()
+            if meter:
+                meter.embedding_usage.append(
+                    {
+                        "provider": "openai",
+                        "model": model,
+                        "input_tokens": billing_tokens(query),
+                        "output_tokens": 0,
+                        "token_source": "local_estimate",
+                        "stage": "query_embedding",
+                    }
+                )
             return await embeddings.aembed_query(query)
         except Exception as error:
             logger.exception("Failed to embed query", extra={"error": str(error)})

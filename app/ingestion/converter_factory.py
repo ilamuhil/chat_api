@@ -17,7 +17,7 @@ class DocumentConverterFactory:
     """Lazily creates and reuses the process-wide Docling converter."""
 
     _converter: DocumentConverter | None = None
-    #* any block of code inside the lock is executed one thread at a time. the second thread will wait until the first thread releases the lock.
+    # * any block of code inside the lock is executed one thread at a time. the second thread will wait until the first thread releases the lock.
     _lock = Lock()
 
     @classmethod
@@ -32,6 +32,7 @@ class DocumentConverterFactory:
     @staticmethod
     def _build_converter() -> DocumentConverter:
         pdf_options = PdfPipelineOptions(
+            do_ocr=False,
             ocr_options=RapidOcrOptions(
                 mode=OcrMode.PDF_AWARE_LAYOUT_REGIONS,
                 use_cls=False,

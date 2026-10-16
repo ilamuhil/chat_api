@@ -12,7 +12,9 @@ from collections.abc import Callable, Mapping
 from enum import StrEnum
 from uuid import UUID
 
-from lead_capture_models import (
+from pydantic import AwareDatetime, Field
+
+from app.agent.lead_capture_models import (
     Action,
     ActionSignal,
     ActionSignalType,
@@ -32,7 +34,6 @@ from lead_capture_models import (
     QuestionResolution,
     SourceKind,
 )
-from pydantic import AwareDatetime, Field
 
 
 class SourceRecord(ContractModel):

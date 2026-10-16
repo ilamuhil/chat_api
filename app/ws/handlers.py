@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
+from starlette.websockets import WebSocketState
 
 from app.db.session import (
     create_async_chat_db_session,
@@ -27,6 +29,8 @@ from app.services.chat import (
     send_typing_to_end_user,
     send_typing_to_support_agent,
 )
+from app.services.conversation_lifecycle import close_conversation
+from app.services.lead_capture import capture_lead_form, parse_lead_form
 from app.services.notifications import (
     create_notifications,
     publish_notifications,
@@ -36,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 BOT_PREFS_TTL_SECONDS = 5 * 60
 REQUIRED_BOT_PREF_KEYS = {
+    "capture_leads",
     "bot_id",
     "bot_configuration_id",
     "embedding_configuration_id",
@@ -145,6 +150,7 @@ async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | 
             "confirmation_message": bot.confirmation_message,
             "lead_capture_message": bot.lead_capture_message,
             "lead_capture_timing": bot.lead_capture_timing,
+            "capture_leads": bot.capture_leads,
             "capture_name": bot.capture_name,
             "capture_email": bot.capture_email,
             "capture_phone": bot.capture_phone,
@@ -227,6 +233,8 @@ async def has_lead(
                 Leads.bot_id == bot_id,
                 Leads.organization_id == organization_id,
                 Leads.deleted_at.is_(None),
+                Leads.email.is_not(None),
+                Leads.email != "",
             )
             .order_by(Leads.captured_at.desc())
             .limit(1)
@@ -269,50 +277,10 @@ async def handle_form_capture(
         return False
 
     try:
-        content = message_data.get("content")
-        if not isinstance(content, str):
-            raise TypeError("Form capture content must be a string")
-
-        fields = content.split(":", maxsplit=2)
-        if len(fields) != 3 or not all(field.strip() for field in fields):
-            raise ValueError("Form capture content must use name:email:phone")
-
-        name, email, phone = (field.strip() for field in fields)
-        lead_id = uuid.uuid4()
-
-        lead = Leads(
-            id=lead_id,
-            visitor_id=visitor_uuid,
-            name=name,
-            email=email,
-            phone=phone,
-            bot_id=bot_id,
-            organization_id=session.organization_id,
-            captured_at=datetime.now(UTC),
+        profile = parse_lead_form(message_data.get("content"))
+        lead_id = await capture_lead_form(
+            session, uuid.UUID(str(bot_id)), visitor_uuid, profile
         )
-        async with create_async_dashboard_db_session() as dashboard_db:
-            dashboard_db.add(lead)
-            await dashboard_db.flush()
-            result = cast(
-                CursorResult[Any],
-                await dashboard_db.execute(
-                    update(ConversationsMeta)
-                    .where(ConversationsMeta.id == conversation_uuid)
-                    .values(lead_id=lead_id),
-                ),
-            )
-            if result.rowcount != 1:
-                logger.error(
-                    "Failed to associate lead with conversation",
-                    extra={
-                        "conversation_id": conversation_uuid,
-                        "lead_id": lead_id,
-                        "rowcount": result.rowcount,
-                    },
-                )
-                await dashboard_db.rollback()
-                return True
-            await dashboard_db.commit()
         logger.info(
             "Form capture data stored in database",
             extra={"conversation_id": session.conversation_id},
@@ -360,18 +328,17 @@ async def handle_form_capture(
     await send_to_end_user(
         {
             "type": "form_capture",
-            "message": "Thank you for submitting your details. This chat will continue via email if we get disconnected.",
+            "message": "Your details have been saved for the institute." if message_data.get("fallback") == "contact" else "Thank you for submitting your details. You can start your conversation now.",
+            "fallback": message_data.get("fallback"),
             "role": "system",
             "conversation_id": session.conversation_id,
         },
         session,
     )
-    await send_first_message_once(
-        greeting_key,
-        conversation_uuid,
-        first_message,
-        session,
-    )
+    if message_data.get("fallback") != "contact":
+        await send_first_message_once(
+            greeting_key, conversation_uuid, first_message, session,
+        )
     return False
 
 
@@ -389,39 +356,88 @@ async def end_chat_session(
     await send_typing_to_end_user(session, False)
     await send_typing_to_support_agent(session, False)
     if not already_closed:
-        async with create_async_dashboard_db_session() as dashboard_db:
-            await dashboard_db.execute(
-                update(ConversationsMeta)
-                .where(ConversationsMeta.id == session.conversation_id)
-                .values(
-                    status="closed", closed_by=closed_by, closed_at=datetime.now(UTC)
-                )
+        await close_conversation(
+            uuid.UUID(session.conversation_id),
+            closed_by=closed_by or "system",
+            organization_id=session.organization_id,
+        )
+    for socket in (session.agent_socket, session.user_socket):
+        if (
+            socket is None
+            or socket.application_state != WebSocketState.CONNECTED
+            or socket.client_state != WebSocketState.CONNECTED
+        ):
+            continue
+        with suppress(RuntimeError, WebSocketDisconnect):
+            await socket.send_json(
+                {
+                    "type": "end_chat",
+                    "closed_by": closed_by,
+                    "role": "system",
+                    "message": _agent_end_chat_message(closed_by),
+                    "conversation_id": session.conversation_id,
+                }
             )
-    if session.agent_socket:
-        await session.agent_socket.send_json(
+            await socket.close(code=1000, reason="This conversation is closed")
+
+
+async def request_end_chat(session: ChatSession, websocket: WebSocket) -> bool:
+    """Return True after closure; visitor requests never close a live agent chat."""
+    if websocket == session.agent_socket:
+        await end_chat_session(session, closed_by="support_agent")
+        return True
+    if websocket != session.user_socket:
+        return False
+    agent = session.agent_socket
+    if (
+        agent is not None
+        and agent.application_state == WebSocketState.CONNECTED
+        and agent.client_state == WebSocketState.CONNECTED
+    ):
+        if not session.end_chat_requested:
+            if not session.agent_user_id:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": "The agent needs to rejoin before receiving an end-chat request.",
+                    }
+                )
+                return False
+            notifications = await create_notifications(
+                organization_id=session.organization_id,
+                notification_type="end_chat_request",
+                title="Visitor requested to end chat",
+                body="The visitor has asked you to close the conversation.",
+                metadata={"conversationId": session.conversation_id},
+                recipient_user_ids=[uuid.UUID(session.agent_user_id)],
+            )
+            if not notifications:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": "The agent could not be notified. Please try again.",
+                    }
+                )
+                return False
+            session.end_chat_requested = True
+            await publish_notifications(
+                organization_id=session.organization_id, notifications=notifications
+            )
+            await agent.send_json(
+                {
+                    "type": "end_chat_request",
+                    "role": "system",
+                    "message": "The visitor has requested to end this conversation.",
+                    "conversation_id": session.conversation_id,
+                }
+            )
+        await websocket.send_json(
             {
-                "type": "end_chat",
-                "closed_by": closed_by,
-                "message": _agent_end_chat_message(closed_by),
-            }
-        )
-        await session.agent_socket.close(
-            code=1000,
-            reason="This conversation is closed"
-            if already_closed
-            else f"Chat ended by {closed_by}",
-        )
-    if session.user_socket:
-        await session.user_socket.send_json(
-            {
-                "type": "end_chat",
-                "message": "Chat ended",
+                "type": "end_chat_requested",
+                "message": "agent has been notified to end chat",
                 "conversation_id": session.conversation_id,
             }
         )
-        await session.user_socket.close(
-            code=1000,
-            reason="This conversation is closed"
-            if already_closed
-            else f"Chat ended by {closed_by}",
-        )
+        return False
+    await end_chat_session(session, closed_by="visitor")
+    return True

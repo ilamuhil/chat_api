@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.rag.embeddings import count_tokens
 from app.rag.shared_dataclasses import ConversationTurn, PreparedQuery, RetrievalRequest
+from app.services.billing import model_callbacks
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +83,10 @@ class QueryPreparer(BaseModel):
             model=self.rewrite_model,
             max_completion_tokens=self.max_query_tokens,
             timeout=15,
-            max_retries=1,
+            max_retries=0,
         )
         history_text = "\n".join(f"{turn.role}: {turn.content}" for turn in history)
+        rewriter.callbacks = model_callbacks()
         response = await rewriter.ainvoke(
             [
                 SystemMessage(content=self.rewrite_prompt),

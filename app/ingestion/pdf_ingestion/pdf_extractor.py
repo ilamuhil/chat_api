@@ -32,7 +32,7 @@ class PdfExtractor:
         if pdf_path.stat().st_size == 0:
             logger.error(f"File {pdf_path} is empty")
             raise ValueError(f"File {pdf_path} is empty")
-        result = self.converter.convert(pdf_path, raises_on_error=False)
+        result = self.converter.convert(pdf_path, raises_on_error=False, max_num_pages=200, max_file_size=25_000_000)
         if result.status != ConversionStatus.SUCCESS:
             logger.error(
                 f"Failed to convert PDF file {pdf_path}",

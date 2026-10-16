@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 from langchain.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy import update
@@ -28,6 +28,8 @@ from app.rag import (
     RetrievalResultStatus,
 )
 from app.rag.shared_dataclasses import ConversationTurn, PreparedQuery, RetrievalFailure
+from app.services.billing import complete_current_reply, metered_reply, model_callbacks
+from app.services.lead_capture import capture_lead_turn, record_lead_question
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +144,7 @@ async def _persist_message(
             )
             .values(
                 last_message_at=now,
+                summary_status="pending",
             )
         )
         await dashboard_db.execute(stmnt)
@@ -292,7 +295,7 @@ async def _send_json_safe(socket: WebSocket | None, data: dict[str, Any]) -> Non
         return
     try:
         await socket.send_json(data)
-    except RuntimeError:
+    except (RuntimeError, WebSocketDisconnect):
         # The peer can disconnect between the socket check and this send.
         # Cleanup notifications, such as typing=False, must not mask that
         # disconnect or fail the request.
@@ -310,7 +313,7 @@ async def send_to_end_user(
     session: ChatSession,
     *,
     persist: bool = True,
-) -> None:
+) -> uuid.UUID | None:
     await _send_json_safe(session.user_socket, message_data)
 
     if not persist or message_data.get("type") == "typing":
@@ -325,7 +328,7 @@ async def send_to_end_user(
         raw_role if raw_role in {"user", "ai", "support_agent", "system"} else "system"
     )
     content_type: ContentType = "file" if message_data.get("type") == "file" else "text"
-    await log_message(
+    return await log_message(
         session.conversation_id,
         role,
         str(content),
@@ -356,6 +359,7 @@ async def _retrieval_history(
         return []
 
 
+@metered_reply
 async def respond_with_ai(
     message_data: dict[str, Any],
     bot_pref: dict[str, Any],
@@ -372,7 +376,9 @@ async def respond_with_ai(
                 )
 
             config: RunnableConfig = {
-                "configurable": {"thread_id": session.conversation_id}
+                "configurable": {"thread_id": session.conversation_id},
+                "callbacks": model_callbacks(),
+                "recursion_limit": 12,
             }
             bot_id = uuid.UUID(str(bot_pref["bot_id"]))
             embedding_configuration_id = uuid.UUID(
@@ -466,14 +472,32 @@ async def respond_with_ai(
                     "has_rag_context": has_evidence,
                 },
             )
+            lead_capture = {
+                "status": "unavailable",
+                "action_outcomes": [
+                    "Could not update or verify details/actions this turn. Do not claim a new save, and do not deny previously saved tasks."
+                ],
+            }
+            if message_id:
+                try:
+                    lead_capture = await capture_lead_turn(
+                        session, bot_pref, message_id
+                    )
+                except Exception:
+                    logger.exception(
+                        "Lead capture unavailable",
+                        extra={"conversation_id": session.conversation_id},
+                    )
+            context = InstituteContext(
+                bot_prefs=bot_pref,
+                retrieval_result=retrieval,
+                conversation_id=uuid.UUID(str(session.conversation_id)),
+                lead_capture=lead_capture,
+            )
             response = await agent.ainvoke(
                 {"messages": [HumanMessage(content=user_text)]},
                 config=config,
-                context=InstituteContext(
-                    bot_prefs=bot_pref,
-                    retrieval_result=retrieval,
-                    conversation_id=uuid.UUID(str(session.conversation_id)),
-                ),
+                context=context,
             )
 
             response_messages = response.get("messages", [])
@@ -521,22 +545,35 @@ async def respond_with_ai(
                 )
                 return
 
-            await send_to_end_user(
-                {
-                    "type": "message",
-                    "message": answer,
-                    "retrieval_status": retrieval.status.value,
-                    "sources": [
-                        ref.model_dump(mode="json") for ref in bundle.source_references
-                    ]
-                    if bundle
-                    else [],
-                    "role": "ai",
-                    "conversation_id": session.conversation_id,
-                },
-                session,
-            )
+            reply_payload = {
+                "type": "message",
+                "message": answer,
+                "retrieval_status": retrieval.status.value,
+                "sources": [
+                    ref.model_dump(mode="json") for ref in bundle.source_references
+                ]
+                if bundle
+                else [],
+                "role": "ai",
+                "conversation_id": session.conversation_id,
+            }
+            await complete_current_reply(reply_payload)
+            answer_id = await send_to_end_user(reply_payload, session)
+            if answer_id and context.lead_question:
+                question_text, fields = context.lead_question
+                try:
+                    await record_lead_question(
+                        session, bot_pref, answer_id, question_text, fields
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to record persisted lead question",
+                        extra={"conversation_id": session.conversation_id},
+                    )
         except Exception as e:
+            from app.services.billing import BillingUnavailable
+            if isinstance(e, BillingUnavailable):
+                raise
             logger.exception("Error in respond_with_ai", extra={"error": e})
             await send_to_end_user(
                 {

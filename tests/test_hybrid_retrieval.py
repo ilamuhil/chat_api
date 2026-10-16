@@ -297,7 +297,20 @@ class QueryAndSearchTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("documents.deleted_at IS NULL", sql)
         self.assertIn("embeddings.deleted_at IS NULL", semantic_sql)
         self.assertAlmostEqual(semantic[0].semantic_score, 0.9)
-        self.assertIn(0.30000000000000004, semantic_statement.compile().params.values())
+        # Threshold filtering now occurs after the SQL candidate fetch.
+        rows.all.return_value = [(document, 0.4)]
+        with patch.object(
+            HybridRetriever, "embed_query", AsyncMock(return_value=[1, 0, 0])
+        ):
+            filtered = await retriever.semantic_search(
+                req.original_message,
+                req,
+                db,
+                7,
+                embedding_configuration=config,
+                similarity_threshold=0.7,
+            )
+        self.assertEqual(filtered, [])
 
     async def test_invalid_config_rejected_before_provider_call(self):
         req = request()
@@ -387,6 +400,10 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.enterContext(patch("app.services.billing.reserve_reply", new=AsyncMock(return_value=None)))
+        self.enterContext(patch("app.services.billing.finish_reply", new=AsyncMock()))
+
     async def test_history_scoped_to_checkpoint_excludes_tools_and_system(self):
         agent = SimpleNamespace(
             aget_state=AsyncMock(
@@ -443,6 +460,10 @@ class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
             patch.object(RetrievalPipeline, "retrieve", AsyncMock()) as retrieve,
             patch("app.services.chat.log_retrieval", AsyncMock()) as log,
             patch("app.services.chat.log_message", AsyncMock()),
+            patch(
+                "app.services.chat.capture_lead_turn",
+                AsyncMock(return_value={"state": {}, "action_outcomes": []}),
+            ),
         ):
             factory.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
             factory.return_value.__aexit__ = AsyncMock(return_value=False)

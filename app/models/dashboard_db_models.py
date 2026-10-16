@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Text,
     UniqueConstraint,
     text,
@@ -18,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SqlEnum,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -783,6 +784,14 @@ class ConversationsMeta(Base):
     last_message_snippet: Mapped[str | None] = mapped_column(Text)
     last_message_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(True))
 
+    lead_capture_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    ai_summary: Mapped[str | None] = mapped_column(Text)
+    summary_status: Mapped[str] = mapped_column(Text, server_default=text("'pending'"))
+    summary_through_message_id: Mapped[uuid.UUID | None] = mapped_column()
+    summary_generated_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(False)
+    )
+
     api_key: Mapped[ApiKeys | None] = relationship(
         "ApiKeys", back_populates="conversations_meta"
     )
@@ -798,6 +807,7 @@ class LeadFollowUps(Base):
 
     Attributes:
         id: Follow-up identifier.
+        source_request_id: Idempotent user request identifier.
         counsellor_id: Assigned counsellor identifier.
         follow_up_type: Follow-up action type.
         status: Follow-up lifecycle status.
@@ -816,12 +826,16 @@ class LeadFollowUps(Base):
     __tablename__ = "lead_follow_ups"
     __table_args__ = (
         Index("lead_follow_ups_lead_id_idx", "lead_id"),
+        UniqueConstraint(
+            "source_request_id", name="lead_follow_ups_source_request_key"
+        ),
         {"schema": "public"},
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=text("gen_random_uuid()")
     )
+    source_request_id: Mapped[uuid.UUID | None] = mapped_column()
     counsellor_id: Mapped[uuid.UUID | None] = mapped_column()
     follow_up_type: Mapped[str | None] = mapped_column(Text)
     # ! callback | demo | campus_visit | application_follow_up | send_course_details | review_elligibility | other
@@ -887,7 +901,17 @@ class Leads(Base):
     """
 
     __tablename__ = "leads"
-    __table_args__: ClassVar[dict[str, str]] = {"schema": "public"}
+    __table_args__ = (
+        Index(
+            "leads_active_visitor_key",
+            "organization_id",
+            "bot_id",
+            "visitor_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        {"schema": "public"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=text("gen_random_uuid()")
@@ -906,6 +930,11 @@ class Leads(Base):
     # ! online | offline | both
     joining_timeline: Mapped[str | None] = mapped_column(Text)
     # ! immediate | within_1_week | within_1_month | within_3_months | beyond_3_months
+    joining_preference_details: Mapped[str | None] = mapped_column(Text)
+    profile_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb")
+    )
+    profile_version: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     primary_intent: Mapped[str | None] = mapped_column(Text)
     # ! course_info | course_recommendation | elligibility | fees | batch_or_schedule | application | counselling | demo | campus_visit | general_enquiry | other
     lead_priority: Mapped[str | None] = mapped_column(Text)
@@ -916,9 +945,7 @@ class Leads(Base):
     # ! schedule_callback | schedule_demo | schedule_campus_visit | application_follow_up | send_course_details | review_elligibility | other
     pipeline_stage: Mapped[str | None] = mapped_column(Text)
     # ! new_enquiry | qualified | counselling_requested | contacted | application_started | enrolled | lost
-    consent_to_contact: Mapped[bool | None] = mapped_column(
-        Boolean, server_default=text("false")
-    )
+    consent_to_contact: Mapped[bool | None] = mapped_column(Boolean)
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(True),
         nullable=False,
@@ -946,4 +973,272 @@ class Leads(Base):
     )
     lead_follow_ups: Mapped[list[LeadFollowUps]] = relationship(
         "LeadFollowUps", back_populates="lead"
+    )
+
+
+# Billing mirrors: dashboard Prisma migrations remain the schema authority.
+
+
+class BillingAccount(Base):
+    __tablename__ = "billing_accounts"
+    __table_args__ = {"schema": "public"}
+    organization_id: Mapped[str] = mapped_column(
+        "organization_id", Text, primary_key=True, nullable=False
+    )
+    plan_id: Mapped[str] = mapped_column("plan_id", Text, nullable=False)
+    plan_version: Mapped[str] = mapped_column("plan_version", Text, nullable=False)
+    limits: Mapped[dict] = mapped_column("limits", JSONB, nullable=False)
+    status: Mapped[str] = mapped_column("status", Text, nullable=False)
+    trial_ends_at: Mapped[datetime.datetime] = mapped_column(
+        "trial_ends_at", DateTime(True), nullable=False
+    )
+    paid_through: Mapped[datetime.datetime | None] = mapped_column(
+        "paid_through", DateTime(True), nullable=True
+    )
+    grace_until: Mapped[datetime.datetime | None] = mapped_column(
+        "grace_until", DateTime(True), nullable=True
+    )
+    current_period_id: Mapped[uuid.UUID | None] = mapped_column(
+        "current_period_id", UUID(as_uuid=True), nullable=True
+    )
+    provider_subscription_id: Mapped[str | None] = mapped_column(
+        "provider_subscription_id", Text, nullable=True
+    )
+    provider_status: Mapped[str | None] = mapped_column(
+        "provider_status", Text, nullable=True
+    )
+    provider_updated_at: Mapped[datetime.datetime | None] = mapped_column(
+        "provider_updated_at", DateTime(True), nullable=True
+    )
+    cancel_at_period_end: Mapped[bool] = mapped_column(
+        "cancel_at_period_end", Boolean, nullable=False
+    )
+    pending_plan_id: Mapped[str | None] = mapped_column(
+        "pending_plan_id", Text, nullable=True
+    )
+    billing_details: Mapped[dict] = mapped_column(
+        "billing_details", JSONB, nullable=False
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        "created_at", DateTime(True), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        "updated_at", DateTime(True), nullable=False
+    )
+
+
+class BillingTrialClaim(Base):
+    __tablename__ = "billing_trial_claims"
+    __table_args__ = {"schema": "public"}
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        "user_id", UUID(as_uuid=True), primary_key=True, nullable=False
+    )
+    organization_id: Mapped[str] = mapped_column(
+        "organization_id", Text, nullable=False
+    )
+    claimed_at: Mapped[datetime.datetime] = mapped_column(
+        "claimed_at", DateTime(True), nullable=False
+    )
+
+
+class BillingPeriod(Base):
+    __tablename__ = "billing_periods"
+    __table_args__ = {"schema": "public"}
+    id: Mapped[uuid.UUID] = mapped_column(
+        "id", UUID(as_uuid=True), primary_key=True, nullable=False
+    )
+    organization_id: Mapped[str] = mapped_column(
+        "organization_id", Text, nullable=False
+    )
+    plan_id: Mapped[str] = mapped_column("plan_id", Text, nullable=False)
+    plan_version: Mapped[str] = mapped_column("plan_version", Text, nullable=False)
+    starts_at: Mapped[datetime.datetime] = mapped_column(
+        "starts_at", DateTime(True), nullable=False
+    )
+    ends_at: Mapped[datetime.datetime] = mapped_column(
+        "ends_at", DateTime(True), nullable=False
+    )
+    reply_limit: Mapped[int] = mapped_column("reply_limit", Integer, nullable=False)
+    replies_used: Mapped[int] = mapped_column("replies_used", Integer, nullable=False)
+    replies_reserved: Mapped[int] = mapped_column(
+        "replies_reserved", Integer, nullable=False
+    )
+    training_limit: Mapped[int] = mapped_column(
+        "training_limit", BigInteger, nullable=False
+    )
+    training_used: Mapped[int] = mapped_column(
+        "training_used", BigInteger, nullable=False
+    )
+    training_reserved: Mapped[int] = mapped_column(
+        "training_reserved", BigInteger, nullable=False
+    )
+    payment_id: Mapped[str | None] = mapped_column("payment_id", Text, nullable=True)
+
+
+class BillingCheckout(Base):
+    __tablename__ = "billing_checkouts"
+    __table_args__ = {"schema": "public"}
+    id: Mapped[uuid.UUID] = mapped_column(
+        "id", UUID(as_uuid=True), primary_key=True, nullable=False
+    )
+    organization_id: Mapped[str] = mapped_column(
+        "organization_id", Text, nullable=False
+    )
+    plan_id: Mapped[str] = mapped_column("plan_id", Text, nullable=False)
+    kind: Mapped[str] = mapped_column("kind", Text, nullable=False)
+    provider_id: Mapped[str] = mapped_column("provider_id", Text, nullable=False)
+    session_id: Mapped[str | None] = mapped_column("session_id", Text, nullable=True)
+    billing_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb")
+    )
+    status: Mapped[str] = mapped_column("status", Text, nullable=False)
+    subtotal_paise: Mapped[int] = mapped_column(
+        "subtotal_paise", Integer, nullable=False
+    )
+    tax_paise: Mapped[int] = mapped_column("tax_paise", Integer, nullable=False)
+    total_paise: Mapped[int] = mapped_column("total_paise", Integer, nullable=False)
+    tax_bps: Mapped[int] = mapped_column("tax_bps", Integer, nullable=False)
+    first_charge_at: Mapped[datetime.datetime] = mapped_column(
+        "first_charge_at", DateTime(True), nullable=False
+    )
+    expires_at: Mapped[datetime.datetime] = mapped_column(
+        "expires_at", DateTime(True), nullable=False
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        "created_at", DateTime(True), nullable=False
+    )
+
+
+class BillingPayment(Base):
+    __tablename__ = "billing_payments"
+    __table_args__ = {"schema": "public"}
+    id: Mapped[str] = mapped_column("id", Text, primary_key=True, nullable=False)
+    organization_id: Mapped[str] = mapped_column(
+        "organization_id", Text, nullable=False
+    )
+    provider_subscription_id: Mapped[str | None] = mapped_column(
+        "provider_subscription_id", Text, nullable=True
+    )
+    checkout_id: Mapped[uuid.UUID] = mapped_column(
+        "checkout_id", UUID(as_uuid=True), nullable=False
+    )
+    kind: Mapped[str] = mapped_column("kind", Text, nullable=False)
+    status: Mapped[str] = mapped_column("status", Text, nullable=False)
+    amount_paise: Mapped[int] = mapped_column("amount_paise", Integer, nullable=False)
+    refunded_paise: Mapped[int] = mapped_column(
+        "refunded_paise", Integer, nullable=False
+    )
+    currency: Mapped[str] = mapped_column("currency", Text, nullable=False)
+    scheduled_at: Mapped[datetime.datetime | None] = mapped_column(
+        "scheduled_at", DateTime(True), nullable=True
+    )
+    paid_at: Mapped[datetime.datetime | None] = mapped_column(
+        "paid_at", DateTime(True), nullable=True
+    )
+    failure_reason: Mapped[str | None] = mapped_column(
+        "failure_reason", Text, nullable=True
+    )
+    receipt_number: Mapped[str | None] = mapped_column(
+        "receipt_number", Text, nullable=True
+    )
+    invoice_number: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text(
+            "('INV' || lpad(nextval('public.billing_invoice_number_seq')::text, 10, '0'))"
+        ),
+    )
+    snapshot: Mapped[dict] = mapped_column("snapshot", JSONB, nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        "updated_at", DateTime(True), nullable=False
+    )
+
+
+class BillingEvent(Base):
+    __tablename__ = "billing_events"
+    __table_args__ = {"schema": "public"}
+    id: Mapped[str] = mapped_column("id", Text, primary_key=True, nullable=False)
+    event_type: Mapped[str] = mapped_column("event_type", Text, nullable=False)
+    provider_id: Mapped[str | None] = mapped_column("provider_id", Text, nullable=True)
+    payload: Mapped[dict] = mapped_column("payload", JSONB, nullable=False)
+    received_at: Mapped[datetime.datetime] = mapped_column(
+        "received_at", DateTime(True), nullable=False
+    )
+    processed_at: Mapped[datetime.datetime | None] = mapped_column(
+        "processed_at", DateTime(True), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column("error", Text, nullable=True)
+
+
+class BillingUsage(Base):
+    __tablename__ = "billing_usage"
+    __table_args__ = {"schema": "public"}
+    id: Mapped[str] = mapped_column("id", Text, primary_key=True, nullable=False)
+    organization_id: Mapped[str] = mapped_column(
+        "organization_id", Text, nullable=False
+    )
+    period_id: Mapped[uuid.UUID] = mapped_column(
+        "period_id", UUID(as_uuid=True), nullable=False
+    )
+    kind: Mapped[str] = mapped_column("kind", Text, nullable=False)
+    status: Mapped[str] = mapped_column("status", Text, nullable=False)
+    amount: Mapped[int] = mapped_column("amount", BigInteger, nullable=False)
+    pack_id: Mapped[str | None] = mapped_column("pack_id", Text, nullable=True)
+    response: Mapped[dict | None] = mapped_column("response", JSONB, nullable=True)
+    cost: Mapped[dict] = mapped_column("cost", JSONB, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        "created_at", DateTime(True), nullable=False
+    )
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(
+        "completed_at", DateTime(True), nullable=True
+    )
+
+
+class BillingCreditPack(Base):
+    __tablename__ = "billing_credit_packs"
+    __table_args__ = {"schema": "public"}
+    id: Mapped[str] = mapped_column("id", Text, primary_key=True, nullable=False)
+    organization_id: Mapped[str] = mapped_column(
+        "organization_id", Text, nullable=False
+    )
+    replies: Mapped[int] = mapped_column("replies", Integer, nullable=False)
+    used: Mapped[int] = mapped_column("used", Integer, nullable=False)
+    reserved: Mapped[int] = mapped_column("reserved", Integer, nullable=False)
+    expires_at: Mapped[datetime.datetime] = mapped_column(
+        "expires_at", DateTime(True), nullable=False
+    )
+    revoked: Mapped[bool] = mapped_column("revoked", Boolean, nullable=False)
+
+
+class BillingSourceUsage(Base):
+    __tablename__ = "billing_source_usage"
+    __table_args__ = {"schema": "public"}
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        "source_id", UUID(as_uuid=True), primary_key=True, nullable=False
+    )
+    organization_id: Mapped[str] = mapped_column(
+        "organization_id", Text, nullable=False
+    )
+    tokens: Mapped[int] = mapped_column("tokens", BigInteger, nullable=False)
+    pending_tokens: Mapped[int] = mapped_column(
+        "pending_tokens", BigInteger, nullable=False
+    )
+    content_hash: Mapped[str | None] = mapped_column(
+        "content_hash", Text, nullable=True
+    )
+
+
+class BillingNotice(Base):
+    __tablename__ = "billing_notices"
+    __table_args__ = {"schema": "public"}
+    id: Mapped[str] = mapped_column("id", Text, primary_key=True, nullable=False)
+    organization_id: Mapped[str] = mapped_column(
+        "organization_id", Text, nullable=False
+    )
+    kind: Mapped[str] = mapped_column("kind", Text, nullable=False)
+    sent_at: Mapped[datetime.datetime | None] = mapped_column(
+        "sent_at", DateTime(True), nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        "created_at", DateTime(True), nullable=False
     )

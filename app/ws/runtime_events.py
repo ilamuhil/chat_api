@@ -27,6 +27,16 @@ async def listen_for_runtime_events() -> None:
                 if session is None:
                     continue
 
+                if event_type == "conversation_closed":
+                    from app.ws.handlers import end_chat_session
+
+                    await end_chat_session(
+                        session,
+                        closed_by=data.get("closed_by") or "system",
+                        already_closed=True,
+                    )
+                    continue
+
                 if event_type == "assistance" and data.get("status") in {
                     "searching",
                     "connected",

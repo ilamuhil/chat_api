@@ -14,10 +14,14 @@ class ChatSession(BaseModel):
     # WebSocket objects are runtime-only (not JSON-serializable); exclude from dumps.
     user_socket: WebSocket | None = Field(default=None, exclude=True)
     agent_socket: WebSocket | None = Field(default=None, exclude=True)
+    agent_user_id: str | None = None
+    end_chat_requested: bool = False
     mode: Literal["ai", "human"] = Field(default="ai")
 
-    def agent_connect(self, websocket: WebSocket):
+    def agent_connect(self, websocket: WebSocket, user_id: str | None = None):
         self.agent_socket = websocket
+        self.agent_user_id = user_id
+        self.end_chat_requested = False
         self.mode = "human"
 
     def user_connect(self, websocket: WebSocket):
@@ -25,6 +29,8 @@ class ChatSession(BaseModel):
 
     def agent_disconnect(self):
         self.agent_socket = None
+        self.agent_user_id = None
+        self.end_chat_requested = False
         self.mode = "ai"
 
     def user_disconnect(self):

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_async_chat_db
 from app.models.chat_db_models import BotConfigurations, EmbeddingConfigurations
+from app.services.billing import STANDARD_MODEL
 
 
 class ModelConfigCreate(BaseModel):
@@ -71,7 +72,7 @@ async def create_model_config(
             bot_id=bot_uuid,
             embedding_configuration_id=embedding_configuration.id,
             provider="openai",
-            model="gpt-5.6-luna",
+            model=STANDARD_MODEL,
             version="1",
             retrieval_k=10,
             similarity_threshold=0.7,

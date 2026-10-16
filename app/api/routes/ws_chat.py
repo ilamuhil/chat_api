@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from contextlib import suppress
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -25,6 +26,7 @@ from app.ws.handlers import (
     handle_form_capture,
     has_lead,
     load_bot_prefs,
+    request_end_chat,
     send_first_message_once,
 )
 from app.ws.registry import ACTIVE_SESSIONS
@@ -62,15 +64,13 @@ async def chat(websocket: WebSocket):
             "Error parsing visitor UUID", extra={"visitor_id": session.visitor_id}
         )
         return
-    lead_exists, lead_id = await has_lead(
-        visitor_uuid, bot_id, session.organization_id
-    )
+    lead_exists, lead_id = await has_lead(visitor_uuid, bot_id, session.organization_id)
     form_required = websocket == session.user_socket and not lead_exists
     ai_queue: asyncio.Queue[dict[str, Any]] | None = None
     ai_worker_task: asyncio.Task[None] | None = None
 
     if websocket == session.user_socket:
-        ai_queue = asyncio.Queue()
+        ai_queue = asyncio.Queue(maxsize=3)
 
         async def process_ai_queue() -> None:
             while True:
@@ -109,6 +109,14 @@ async def chat(websocket: WebSocket):
                 session,
             )
 
+        if websocket == session.user_socket:
+            await websocket.send_json(
+                {
+                    "type": "conversation_ready",
+                    "conversation_id": session.conversation_id,
+                    "form_required": form_required,
+                }
+            )
         while True:
             # if conversation is closed disconnect the websocket
             try:
@@ -136,11 +144,39 @@ async def chat(websocket: WebSocket):
                 await websocket.send_json({"type": "pong"})
                 continue
             elif msg_type == "end_chat":
-                await end_chat_session(session, closed_by="visitor")
-                break
+                try:
+                    if await request_end_chat(session, websocket):
+                        break
+                except Exception:
+                    logger.exception(
+                        "Could not process end-chat request",
+                        extra={"conversation_id": session.conversation_id},
+                    )
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Could not process the end-chat request. Please try again.",
+                        }
+                    )
+                continue
 
             logger.debug("WebSocket message received", extra={"type": msg_type})
+            if msg_type == "request_counsellor" and websocket == session.user_socket:
+                from app.agent.edu_agent import request_handover
+
+                result = await request_handover(conversation_uuid)
+                await websocket.send_json(
+                    {
+                        "type": "message",
+                        "role": "system",
+                        "message": result["message"],
+                        "conversation_id": session.conversation_id,
+                    }
+                )
+                continue
             if msg_type == "form_capture":
+                if message_data.get("fallback") == "contact":
+                    form_required = True
                 if websocket != session.user_socket or visitor_uuid is None:
                     continue
                 form_required = await handle_form_capture(
@@ -171,9 +207,7 @@ async def chat(websocket: WebSocket):
 
                 if msg_type == "typing":
                     is_typing = bool(message_data.get("is_typing", False))
-                    await send_typing_to_support_agent(
-                        session, is_typing, actor="user"
-                    )
+                    await send_typing_to_support_agent(session, is_typing, actor="user")
                     continue
 
                 elif msg_type == "file":
@@ -216,7 +250,18 @@ async def chat(websocket: WebSocket):
                     await send_to_support_agent(message_data, session)
                 elif session.mode == "ai":
                     if ai_queue is not None:
-                        await ai_queue.put(message_data)
+                        if ai_queue.full():
+                            await websocket.send_json(
+                                {
+                                    "type": "ai_unavailable",
+                                    "code": "temporarily_busy",
+                                    "message": "Please wait for your earlier messages to finish, then try again.",
+                                    "fallback": "retry",
+                                    "conversation_id": session.conversation_id,
+                                }
+                            )
+                        else:
+                            ai_queue.put_nowait(message_data)
 
             # agent -> user
             elif websocket == session.agent_socket:
@@ -252,5 +297,9 @@ async def chat(websocket: WebSocket):
                 await ai_worker_task
             except asyncio.CancelledError:
                 pass
-        if websocket.application_state != WebSocketState.DISCONNECTED:
-            await websocket.close()
+        if (
+            websocket.application_state != WebSocketState.DISCONNECTED
+            and websocket.client_state != WebSocketState.DISCONNECTED
+        ):
+            with suppress(WebSocketDisconnect):
+                await websocket.close()

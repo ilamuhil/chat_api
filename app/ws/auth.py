@@ -95,13 +95,43 @@ async def authenticate_socket(
         return None
 
     if connection_type == "user":
-        session = ChatSession(
-            conversation_id=conversation_id,
-            organization_id=organization_id,
-            user_socket=websocket,
-            visitor_id=visitor_id,
+        conversation = await get_conversation(
+            uuid.UUID(conversation_id), open_only=False
         )
-        active_sessions[conversation_id] = session
+        if (
+            conversation is None
+            or conversation.organization_id != organization_id
+            or conversation.bot_id != bot_id
+        ):
+            await websocket.close(code=1008, reason="Conversation not found")
+            return None
+        if conversation.status == "closed":
+            await websocket.send_json(
+                {
+                    "type": "end_chat",
+                    "conversation_id": conversation_id,
+                    "message": "Conversation closed",
+                }
+            )
+            await websocket.close(code=1000)
+            return None
+        session = active_sessions.get(conversation_id)
+        if session is not None:
+            if (
+                session.organization_id != organization_id
+                or session.visitor_id != visitor_id
+            ):
+                await websocket.close(code=1008, reason="Visitor session mismatch")
+                return None
+            session.user_connect(websocket)
+        else:
+            session = ChatSession(
+                conversation_id=conversation_id,
+                organization_id=organization_id,
+                user_socket=websocket,
+                visitor_id=visitor_id,
+            )
+            active_sessions[conversation_id] = session
         return session, bot_id
 
     if connection_type == "support_agent":
@@ -126,14 +156,17 @@ async def authenticate_socket(
             await websocket.close(code=1008, reason="Unauthorized Organization Access")
             return None
 
-        session.agent_connect(websocket)
+        user_id = claims.get("sub")
+        if not isinstance(user_id, str):
+            await websocket.close(
+                code=1008, reason="Agent identity is required; join again"
+            )
+            return None
+        session.agent_connect(websocket, user_id)
         try:
             conversation_uuid = uuid.UUID(conversation_id)
             conversation = await get_conversation(conversation_uuid)
-            if (
-                conversation is not None
-                and conversation.handover_status == "requested"
-            ):
+            if conversation is not None:
                 await publish_assistance_status(conversation_id, "connected")
                 # Accepted requests must not later time out as unanswered.
                 await update_conversation_handover_status(

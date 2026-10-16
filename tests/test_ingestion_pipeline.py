@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import uuid
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +31,13 @@ def _sqlite_search_type(*args, **kwargs):
 
 class IngestionPipelineTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.enterContext(
+            patch(
+                "app.ingestion.pipeline.reserve_training",
+                return_value=("unit-training", False),
+            )
+        )
+        self.enterContext(patch("app.ingestion.pipeline.finish_training"))
         # Exercise real ORM writes, constraints, cascades, commits, and rollbacks.
         # PostgreSQL's generated search vector is omitted from the SQLite schema.
         self.engine = create_engine("sqlite://")
@@ -232,6 +240,12 @@ class IngestionPipelineTests(unittest.TestCase):
         from docling.datamodel.base_models import ConversionStatus
 
         self.upload("Guide.docx", "placeholder")
+
+        def download_docx(_bucket, _key, path):
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("word/document.xml", "<document>Admissions</document>")
+
+        self.download.side_effect = download_docx
         with patch(
             "app.ingestion.converter_factory.DocumentConverterFactory.get_converter"
         ) as converter:

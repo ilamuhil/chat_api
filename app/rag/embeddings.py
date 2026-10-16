@@ -37,7 +37,7 @@ def create_embeddings(
             logger.info(f"No new documents to embed for source: {source_id}")
             return
 
-        embeddings = OpenAIEmbeddings(model=model, dimensions=dimensions)
+        embeddings = OpenAIEmbeddings(model=model, dimensions=dimensions, timeout=60, max_retries=0)
         vectors = embeddings.embed_documents([cast(str, d.content) for d in documents])
         if len(vectors) != len(documents) or any(
             len(vector) != dimensions for vector in vectors
