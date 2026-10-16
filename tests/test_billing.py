@@ -194,6 +194,103 @@ class BillingDatabaseTests(unittest.IsolatedAsyncioTestCase):
                 await db.commit()
             await async_dashboard_db_engine.dispose()
 
+    async def test_reply_pack_carries_across_renewal_and_expires(self):
+        org = f"billing-pack-carryover-{uuid4()}"
+        first_period, renewed_period = uuid4(), uuid4()
+        pack_id = f"pack:{uuid4()}"
+        limits = {"transcriptDays": 90, "leadDays": 365}
+        async with create_async_dashboard_db_session() as db:
+            await db.execute(
+                text("INSERT INTO organizations(id) VALUES (:org)"), {"org": org}
+            )
+            await db.execute(
+                text(
+                    "INSERT INTO billing_accounts(organization_id,plan_id,plan_version,limits,status,trial_ends_at,paid_through,current_period_id,updated_at) VALUES(:org,'starter','2026-10-16',CAST(:limits AS jsonb),'active',now(),now()+interval '60 days',:period,now())"
+                ),
+                {"org": org, "limits": json.dumps(limits), "period": first_period},
+            )
+            await db.execute(
+                text(
+                    "INSERT INTO billing_periods(id,organization_id,plan_id,plan_version,starts_at,ends_at,reply_limit,replies_used,training_limit) VALUES(:id,:org,'starter','2026-10-16',now()-interval '30 days',now(),1,1,100)"
+                ),
+                {"id": first_period, "org": org},
+            )
+            await db.execute(
+                text(
+                    "INSERT INTO billing_credit_packs(id,organization_id,replies,expires_at) VALUES(:id,:org,2,now()+interval '90 days')"
+                ),
+                {"id": pack_id, "org": org},
+            )
+            await db.commit()
+        try:
+            digest = hashlib.sha256(b"pack carryover").hexdigest()
+            before_renewal = f"test:{uuid4()}"
+            await reserve_reply(org, before_renewal, digest)
+            await finish_reply(before_renewal, {"message": "pack reply"}, TurnMeter())
+
+            async with create_async_dashboard_db_session() as db:
+                await db.execute(
+                    text(
+                        "INSERT INTO billing_periods(id,organization_id,plan_id,plan_version,starts_at,ends_at,reply_limit,training_limit) VALUES(:id,:org,'starter','2026-10-16',now(),now()+interval '30 days',1,100)"
+                    ),
+                    {"id": renewed_period, "org": org},
+                )
+                await db.execute(
+                    text(
+                        "UPDATE billing_accounts SET current_period_id=:period,paid_through=now()+interval '30 days' WHERE organization_id=:org"
+                    ),
+                    {"period": renewed_period, "org": org},
+                )
+                await db.commit()
+
+            base_reply = f"test:{uuid4()}"
+            await reserve_reply(org, base_reply, digest)
+            await finish_reply(base_reply, {"message": "new base reply"}, TurnMeter())
+            async with create_async_dashboard_db_session() as db:
+                pack = (
+                    await db.execute(
+                        text(
+                            "SELECT used,reserved FROM billing_credit_packs WHERE id=:id"
+                        ),
+                        {"id": pack_id},
+                    )
+                ).one()
+                self.assertEqual(tuple(pack), (1, 0))
+
+            carried_reply = f"test:{uuid4()}"
+            await reserve_reply(org, carried_reply, digest)
+            await finish_reply(
+                carried_reply, {"message": "carried pack reply"}, TurnMeter()
+            )
+            async with create_async_dashboard_db_session() as db:
+                self.assertEqual(
+                    await db.scalar(
+                        text(
+                            "SELECT used FROM billing_credit_packs WHERE id=:id"
+                        ),
+                        {"id": pack_id},
+                    ),
+                    2,
+                )
+                await db.execute(
+                    text(
+                        "UPDATE billing_credit_packs SET replies=3,expires_at=now()-interval '1 second' WHERE id=:id"
+                    ),
+                    {"id": pack_id},
+                )
+                await db.commit()
+
+            with self.assertRaises(BillingUnavailable) as expired:
+                await reserve_reply(org, f"test:{uuid4()}", digest)
+            self.assertEqual(expired.exception.code, "ai_limit_reached")
+        finally:
+            async with create_async_dashboard_db_session() as db:
+                await db.execute(
+                    text("DELETE FROM organizations WHERE id=:org"), {"org": org}
+                )
+                await db.commit()
+            await async_dashboard_db_engine.dispose()
+
 
 @unittest.skipUnless(
     os.getenv("RUN_BILLING_DB_TESTS") == "1", "Development DB verification is opt-in"
