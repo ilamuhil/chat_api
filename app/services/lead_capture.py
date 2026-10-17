@@ -7,6 +7,7 @@ claims that a booking has been confirmed.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
-from sqlalchemy import and_, false, or_, select
+from sqlalchemy import and_, false, or_, select, true
 from sqlalchemy import update as sql_update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import aliased
@@ -49,8 +50,9 @@ from app.domain.chat import ChatSession
 from app.models.chat_db_models import Messages
 from app.models.dashboard_db_models import ConversationsMeta, LeadFollowUps, Leads
 from app.services.billing import model_callbacks
-from app.services.latency import timed_stage
+from app.services.latency import latency_stage, timed_stage
 from app.services.lead_context import compact_lead_state
+from app.services.lead_fastpath import detect_factual_turn
 from app.services.lead_merge_service import LeadMergeService, MergePolicy, SourceRecord
 
 logger = logging.getLogger(__name__)
@@ -421,33 +423,63 @@ async def scoped_conversation(db, session: ChatSession, bot_id: UUID, *, lock=Fa
     return conversation
 
 
-async def read_lead_snapshot(db, session: ChatSession, bot_id: UUID):
+async def read_lead_snapshot(db, session: ChatSession, bot_id: UUID, *, lock=False):
+    """One command; in write mode lock conversation before its optional lead.
+
+    A MATERIALIZED locking CTE feeds a correlated LATERAL locking subquery.
+    The outer join itself is not locked (the lead may be absent).
+    """
+    conversation_filters = (
+        ConversationsMeta.id == UUID(session.conversation_id),
+        ConversationsMeta.organization_id == session.organization_id,
+        ConversationsMeta.bot_id == bot_id,
+    )
+    conversation_query = select(ConversationsMeta).where(*conversation_filters)
+    conversation_model = ConversationsMeta
+    lead_model = Leads
+    if lock:
+        locked = (
+            conversation_query.with_for_update()
+            .cte("locked_conversation")
+            .prefix_with("MATERIALIZED", dialect="postgresql")
+        )
+        conversation_model = aliased(ConversationsMeta, locked)
     visitor_match = (
         Leads.visitor_id == UUID(session.visitor_id) if session.visitor_id else false()
     )
-    join = and_(
+    lead_match = and_(
         Leads.organization_id == session.organization_id,
         Leads.bot_id == bot_id,
         Leads.deleted_at.is_(None),
         or_(
             and_(
-                ConversationsMeta.lead_id.is_not(None),
-                Leads.id == ConversationsMeta.lead_id,
+                conversation_model.lead_id.is_not(None),
+                Leads.id == conversation_model.lead_id,
             ),
-            and_(ConversationsMeta.lead_id.is_(None), visitor_match),
+            and_(conversation_model.lead_id.is_(None), visitor_match),
         ),
     )
-    row = (
-        await db.execute(
-            select(ConversationsMeta, Leads)
-            .outerjoin(Leads, join)
-            .where(
-                ConversationsMeta.id == UUID(session.conversation_id),
-                ConversationsMeta.organization_id == session.organization_id,
-                ConversationsMeta.bot_id == bot_id,
-            )
+    if lock:
+        lead_query = (
+            select(Leads)
+            .where(lead_match)
+            .correlate(conversation_model)
+            .with_for_update()
+            .lateral("locked_lead")
         )
-    ).one_or_none()
+        lead_model = aliased(Leads, lead_query)
+        query = (
+            select(conversation_model, lead_model)
+            .select_from(conversation_model)
+            .outerjoin(lead_model, true())
+        )
+    else:
+        query = (
+            select(ConversationsMeta, Leads)
+            .outerjoin(Leads, lead_match)
+            .where(*conversation_filters)
+        )
+    row = (await db.execute(query)).one_or_none()
     if row is None:
         raise ValueError("Conversation is outside the current bot/organization")
     return row
@@ -627,11 +659,8 @@ async def save_follow_up(db, lead, pending, *, status):
     pending.follow_up_id = result
 
 
-@timed_stage("lead_capture")
-async def capture_lead_turn(
-    session: ChatSession, prefs: dict[str, Any], message_id: UUID
-) -> dict[str, Any]:
-    bot_id = UUID(prefs["bot_id"])
+@timed_stage("lead_message_read")
+async def read_visitor_turn(session: ChatSession, message_id: UUID):
     async with create_async_chat_db_session() as db:
         previous = aliased(Messages)
         previous_answer = (
@@ -658,11 +687,54 @@ async def capture_lead_turn(
         if row is None or row[0].created_at is None:
             raise ValueError("Visitor message was not persisted")
         message, previous = row
+        return message, previous
+
+
+@timed_stage("lead_snapshot_read")
+async def read_turn_snapshot(session: ChatSession, bot_id: UUID):
     async with create_async_dashboard_db_session() as db:
         conversation, lead = await read_lead_snapshot(db, session, bot_id)
-        snapshot = restore_state(conversation, lead)
-        profile_version = lead.profile_version if lead else None
-    extraction = await extract_turn(message, snapshot, prefs, previous)
+        return restore_state(conversation, lead), lead.profile_version if lead else None
+
+
+def factual_extraction(message, state):
+    factual = detect_factual_turn(message.content or "", state)
+    if factual is None:
+        return None
+    # Keep source-backed scope/intent changes, without recording identical evidence
+    # again on every FAQ. No personal fields, question resolutions, or actions.
+    intent = (
+        factual.intent
+        if state.current_request is None
+        or state.current_request.intent != factual.intent
+        else None
+    )
+    names = list(factual.course_names)
+    if not state.active_course_scope.ambiguous and [
+        name.casefold() for name in names
+    ] == [name.casefold() for name in state.active_course_scope.course_names]:
+        names = []
+    return TurnExtraction(intent=intent, course_names=names)
+
+
+@timed_stage("lead_capture")
+async def capture_lead_turn(
+    session: ChatSession, prefs: dict[str, Any], message_id: UUID
+) -> dict[str, Any]:
+    bot_id = UUID(prefs["bot_id"])
+    with latency_stage("lead_initial_reads"):
+        async with asyncio.TaskGroup() as reads:
+            message_task = reads.create_task(read_visitor_turn(session, message_id))
+            state_task = reads.create_task(read_turn_snapshot(session, bot_id))
+    message, previous = message_task.result()
+    snapshot, profile_version = state_task.result()
+    with latency_stage("lead_extraction_decision"):
+        extraction = factual_extraction(message, snapshot)
+    if extraction is None:
+        extraction = await extract_turn(message, snapshot, prefs, previous)
+    else:
+        with latency_stage("lead_extraction_skipped"):
+            pass
     update = to_turn_update(extraction, message, snapshot)
     source = SourceRecord(
         source_id=str(message.id),
@@ -672,8 +744,10 @@ async def capture_lead_turn(
     )
     policy = merge_policy(prefs)
     async with create_async_dashboard_db_session() as db:
-        conversation = await scoped_conversation(db, session, bot_id, lock=True)
-        lead = await scoped_lead(db, conversation, session, bot_id, lock=True)
+        with latency_stage("lead_write_lock"):
+            conversation, lead = await read_lead_snapshot(
+                db, session, bot_id, lock=True
+            )
         state = restore_state(conversation, lead)
         if (
             state.revision != snapshot.revision
@@ -682,21 +756,22 @@ async def capture_lead_turn(
             raise LeadStateConflict(
                 "Lead/state was updated during extraction; retry against current data"
             )
-        result = LeadMergeService(
-            policy,
-            claim_verifier=lambda field, value, evidence: (
-                manual_change_allows(
-                    field, value, evidence, lead.profile_metadata or {}
-                )
-                if lead
-                else True
-            ),
-        ).merge(
-            state,
-            update,
-            sources={source.source_id: source},
-            expected_revision=snapshot.revision,
-        )
+        with latency_stage("lead_merge"):
+            result = LeadMergeService(
+                policy,
+                claim_verifier=lambda field, value, evidence: (
+                    manual_change_allows(
+                        field, value, evidence, lead.profile_metadata or {}
+                    )
+                    if lead
+                    else True
+                ),
+            ).merge(
+                state,
+                update,
+                sources={source.source_id: source},
+                expected_revision=snapshot.revision,
+            )
         state = result.state
         # Persist only accepted, changed profile columns. Unrelated turns must not
         # normalize or erase legacy columns as a side effect of loading state.
@@ -802,8 +877,19 @@ async def capture_lead_turn(
             != snapshot.model_dump(exclude={"revision"})
         )
         state = LeadCaptureState.model_validate(state.model_dump())
-        conversation.lead_capture_state = state.model_dump(mode="json")
-        await db.commit()
+        serialized = state.model_dump(mode="json")
+        if serialized != conversation.lead_capture_state:
+            conversation.lead_capture_state = serialized
+        if (
+            db.new
+            or db.deleted
+            or any(db.is_modified(item, include_collections=True) for item in db.dirty)
+        ):
+            with latency_stage("lead_commit"):
+                await db.commit()
+        else:
+            with latency_stage("lead_write_unchanged"):
+                pass
     return {
         "state": state.model_dump(mode="json"),
         "action_outcomes": outcomes,

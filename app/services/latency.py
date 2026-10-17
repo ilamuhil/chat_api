@@ -11,12 +11,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import wraps
 from time import perf_counter
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from app.db.session import create_async_chat_db_session
-from app.domain import ChatSession
 from app.models.chat_db_models import ResponseLatency
+
+if TYPE_CHECKING:
+    from app.domain.chat import ChatSession
 
 logger = logging.getLogger(__name__)
 

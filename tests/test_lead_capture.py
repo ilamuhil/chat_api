@@ -819,7 +819,14 @@ class PostgresLeadCaptureTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
-        with patch("app.services.lead_summary.ChatOpenAI", return_value=model), patch("app.services.lead_summary.reserve_auxiliary", new=AsyncMock(return_value=True)), patch("app.services.lead_summary.finish_auxiliary", new=AsyncMock()):
+        with (
+            patch("app.services.lead_summary.ChatOpenAI", return_value=model),
+            patch(
+                "app.services.lead_summary.reserve_auxiliary",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("app.services.lead_summary.finish_auxiliary", new=AsyncMock()),
+        ):
             await summarize_conversation(self.conversation_id)
         async with self.dash() as db:
             row = await db.get(ConversationsMeta, self.conversation_id)
@@ -955,3 +962,62 @@ class PostgresLeadCaptureTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("BCom", old.ai_summary)
             self.assertEqual(lead.education_level, "MCom")
             self.assertIn("Current: MCom", lead.ai_summary)
+
+    async def test_factual_shortcut_keeps_scope_and_skips_unchanged_writes(self):
+        from sqlalchemy import event as sa_event
+
+        await capture_lead_form(
+            self.session,
+            self.bot_id,
+            self.visitor_id,
+            parse_lead_form(
+                {
+                    "name": "FAQ visitor",
+                    "email": "faq@example.com",
+                    "consentToContact": False,
+                }
+            ),
+        )
+        first = await self.store("What are the fees for Data Analytics?")
+        with patch("app.services.lead_capture.extract_turn", AsyncMock()) as extract:
+            result = await capture_lead_turn(self.session, self.prefs, first.id)
+            extract.assert_not_awaited()
+        self.assertEqual(
+            result["state"]["active_course_scope"]["course_names"], ["Data Analytics"]
+        )
+        self.assertIsNone(result["state"]["profile"]["course_interest"])
+        self.assertFalse(result["state"]["profile"]["consent_to_contact"])
+        repeated = await self.store("What are the fees for Data Analytics?")
+        statements = []
+
+        def observed(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement.strip().upper())
+
+        sa_event.listen(
+            async_dashboard_db_engine.sync_engine, "before_cursor_execute", observed
+        )
+        try:
+            with patch(
+                "app.services.lead_capture.extract_turn", AsyncMock()
+            ) as extract:
+                second = await capture_lead_turn(self.session, self.prefs, repeated.id)
+                extract.assert_not_awaited()
+        finally:
+            sa_event.remove(
+                async_dashboard_db_engine.sync_engine, "before_cursor_execute", observed
+            )
+        self.assertEqual(second["state"], result["state"])
+        self.assertFalse(
+            any(
+                sql.startswith(("UPDATE ", "INSERT ", "DELETE ")) for sql in statements
+            ),
+            statements,
+        )
+        changed = await self.store("What are the fees for Digital Marketing?")
+        with patch("app.services.lead_capture.extract_turn", AsyncMock()) as extract:
+            third = await capture_lead_turn(self.session, self.prefs, changed.id)
+            extract.assert_not_awaited()
+        self.assertEqual(
+            third["state"]["active_course_scope"]["course_names"], ["Digital Marketing"]
+        )
+        self.assertIsNone(third["state"]["profile"]["course_interest"])
