@@ -14,6 +14,7 @@ from rq.job import Job
 from sqlalchemy import select
 
 from app.db.session import create_async_dashboard_db_session
+from app.infra.db_retry import retry_db_operation
 from app.infra.redis_client import REDIS_URL
 from app.models.dashboard_db_models import ConversationsMeta
 from app.services.lead_summary import summarize_conversation
@@ -100,19 +101,22 @@ async def publish_conversation_closed(conversation_id: UUID, closed_by: str) -> 
 
 
 async def queue_pending_summaries() -> None:
-    async with create_async_dashboard_db_session() as db:
-        ids = list(
-            (
-                await db.scalars(
-                    select(ConversationsMeta.id)
-                    .where(
-                        ConversationsMeta.status == "closed",
-                        ConversationsMeta.summary_status.in_(["pending", "failed"]),
+    async def read_pending() -> list[UUID]:
+        async with create_async_dashboard_db_session() as db:
+            return list(
+                (
+                    await db.scalars(
+                        select(ConversationsMeta.id)
+                        .where(
+                            ConversationsMeta.status == "closed",
+                            ConversationsMeta.summary_status.in_(["pending", "failed"]),
+                        )
+                        .order_by(ConversationsMeta.closed_at)
+                        .limit(50)
                     )
-                    .order_by(ConversationsMeta.closed_at)
-                    .limit(50)
-                )
-            ).all()
-        )
+                ).all()
+            )
+
+    ids = await retry_db_operation(read_pending, name="recover pending summaries")
     for conversation_id in ids:
         await enqueue_conversation_summary(conversation_id)

@@ -40,7 +40,7 @@ class TimingTests(unittest.IsolatedAsyncioTestCase):
             async with track_turn(timing, session, prefs):
                 set_latency_outcome("success")
                 mark_response_sent({"type": "message", "role": "ai"})
-            row = db.add.call_args.args[0]
+            row = SimpleNamespace(**db.execute.call_args.args[0].compile().params)
         self.assertEqual(row.response_ms, 10000)
         self.assertEqual(row.elapsed_ms, 15000)
         self.assertEqual(row.stages_ms["queue_wait"], 3000)
@@ -132,7 +132,9 @@ class TimingTests(unittest.IsolatedAsyncioTestCase):
             await persist_latency(
                 TurnLatency(outcome="success"), session, {"bot_id": str(uuid4())}
             )
-        self.assertEqual(db.add.call_args.args[0].outcome, "disconnected")
+        self.assertEqual(
+            db.execute.call_args.args[0].compile().params["outcome"], "disconnected"
+        )
 
 
 class AggregateAuthorizationTests(unittest.TestCase):

@@ -14,7 +14,10 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
+from sqlalchemy.dialects.postgresql import insert
+
 from app.db.session import create_async_chat_db_session
+from app.infra.db_retry import retry_db_operation
 from app.models.chat_db_models import ResponseLatency
 
 if TYPE_CHECKING:
@@ -32,6 +35,7 @@ class TurnLatency:
     response_ms: float | None = None
     outcome: str = "error"
     request_message_id: UUID | None = None
+    event_id: UUID = field(default_factory=uuid4)
 
     def response_sent(self) -> None:
         # Freeze at the first terminal payload, before transcript/billing cleanup.
@@ -95,26 +99,36 @@ async def persist_latency(timing: TurnLatency, session, bot_pref) -> None:
     if timing.response_ms is None and outcome in {"success", "fallback", "cached"}:
         outcome = "disconnected"
     try:
-        async with asyncio.timeout(2):
+        # Freeze measurements before retry time, and reuse one key even when a
+        # commit succeeds but its acknowledgement is lost.
+        statement = (
+            insert(ResponseLatency)
+            .values(
+                id=timing.event_id,
+                organization_id=session.organization_id,
+                bot_id=UUID(str(bot_pref["bot_id"])),
+                conversation_id=UUID(session.conversation_id),
+                request_message_id=timing.request_message_id,
+                model=bot_pref.get("llm_model"),
+                outcome=outcome,
+                response_ms=timing.response_ms,
+                elapsed_ms=elapsed_ms,
+                stages_ms={
+                    key: round(value, 3) for key, value in timing.stages.items()
+                },
+                created_at=timing.created_at,
+            )
+            .on_conflict_do_nothing(index_elements=[ResponseLatency.id])
+        )
+
+        async def save() -> None:
             async with create_async_chat_db_session() as db:
-                db.add(
-                    ResponseLatency(
-                        id=uuid4(),
-                        organization_id=session.organization_id,
-                        bot_id=UUID(str(bot_pref["bot_id"])),
-                        conversation_id=UUID(session.conversation_id),
-                        request_message_id=timing.request_message_id,
-                        model=bot_pref.get("llm_model"),
-                        outcome=outcome,
-                        response_ms=timing.response_ms,
-                        elapsed_ms=elapsed_ms,
-                        stages_ms={
-                            key: round(value, 3) for key, value in timing.stages.items()
-                        },
-                        created_at=timing.created_at,
-                    )
-                )
+                await db.execute(statement)
                 await db.commit()
+
+        await retry_db_operation(
+            save, name="save response latency", attempts=2, timeout=5
+        )
     except Exception:
         logger.exception(
             "Could not persist response latency",
