@@ -13,6 +13,7 @@ from app.api.middleware.jwt import verify_jwt_middleware
 from app.api.router import api_router
 from app.config.logging_config import setup_logging
 from app.core.env import load_app_env
+from app.infra.redis_client import async_redis_client
 from app.ws.runtime_events import listen_for_runtime_events
 
 # load env and setup logging configuration
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI):
                 runtime_events_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await runtime_events_task
+            await async_redis_client.aclose()
 
 
 def create_app() -> FastAPI:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -19,7 +20,7 @@ from app.db.session import (
     create_async_dashboard_db_session,
 )
 from app.domain import ChatSession, InstituteContext
-from app.infra.redis_store import set_data
+from app.infra.redis_store import async_set_data
 from app.models.chat_db_models import Messages, RetrievalLogs
 from app.models.dashboard_db_models import ConversationsMeta
 from app.rag import (
@@ -37,6 +38,7 @@ from app.services.latency import (
     timed_stage,
 )
 from app.services.lead_capture import capture_lead_turn, record_lead_question
+from app.services.lead_context import plan_lead_question
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +164,7 @@ async def _persist_message(
     # Redis stores JSON, so convert the datetime to an ISO-8601 string.
     if content_type == "text":
         try:
-            set_data(
+            await async_set_data(
                 f"conversation:{conversation_id}:meta",
                 {
                     "last_snippet": content,
@@ -353,7 +355,7 @@ async def _retrieval_history(
     try:
         snapshot = await agent.aget_state(config)
         turns: list[ConversationTurn] = []
-        for message in snapshot.values.get("messages", []):
+        for message in snapshot.values.get("messages", [])[-24:]:
             role = getattr(message, "type", None)
             if role not in {"human", "ai"}:
                 continue
@@ -370,6 +372,111 @@ async def _retrieval_history(
         return []
 
 
+async def _retrieve_for_turn(
+    request: RetrievalRequest, conversation_id: str
+) -> RetrievalResult:
+    """Own the retrieval session so lead capture can use separate sessions."""
+    try:
+        async with create_async_chat_db_session() as chat_db:
+            return await RetrievalPipeline(chat_db).retrieve(request)
+    except Exception as error:
+        logger.exception(
+            "Hybrid retrieval unavailable",
+            extra={"conversation_id": conversation_id},
+        )
+        # Keep counsellor requests and non-factual conversation available.
+        return RetrievalResult(
+            status=RetrievalResultStatus.UNAVAILABLE,
+            prepared_query=PreparedQuery(
+                original_message=request.original_message,
+                standalone_query=request.original_message,
+                did_rewrite=False,
+            ),
+            context_bundle=None,
+            clarification_question=None,
+            diagnostics={
+                "error": {
+                    "code": error.code
+                    if isinstance(error, RetrievalFailure)
+                    else "retrieval_unavailable",
+                    "stage": error.stage
+                    if isinstance(error, RetrievalFailure)
+                    else "retrieval",
+                    "message": error.message
+                    if isinstance(error, RetrievalFailure)
+                    else "Reference information could not be searched. Please try again shortly.",
+                    "action": "Retry the request or contact a counsellor.",
+                }
+            },
+        )
+
+
+async def _capture_lead_for_turn(
+    session: ChatSession,
+    bot_pref: dict[str, Any],
+    message_id: uuid.UUID | None,
+) -> dict[str, Any]:
+    lead_capture = {
+        "status": "unavailable",
+        "action_outcomes": [
+            "Could not update or verify details/actions this turn. Do not claim a new save, and do not deny previously saved tasks."
+        ],
+    }
+    if message_id:
+        try:
+            return await capture_lead_turn(session, bot_pref, message_id)
+        except Exception:
+            logger.exception(
+                "Lead capture unavailable",
+                extra={"conversation_id": session.conversation_id},
+            )
+    return lead_capture
+
+
+def _stream_text(chunk: Any) -> str:
+    """Only visible text; never reasoning, tool arguments, or provider metadata."""
+    content = getattr(chunk, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") in {"text", "output_text"}
+            and isinstance(block.get("text"), str)
+        )
+    return ""
+
+
+async def _stream_agent(agent, inputs, config, context, session, stream_id):
+    final_messages = []
+    async for mode, event in agent.astream(
+        inputs, config=config, context=context, stream_mode=["messages", "updates"]
+    ):
+        if mode == "messages":
+            chunk, metadata = event
+            # The model middleware disables tools for this tagged invocation.
+            if "final_answer" not in metadata.get("tags", []):
+                continue
+            text = _stream_text(chunk)
+            if text:
+                await _send_json_safe(
+                    session.user_socket,
+                    {
+                        "type": "message_delta",
+                        "stream_id": stream_id,
+                        "delta": text,
+                        "conversation_id": session.conversation_id,
+                    },
+                )
+        elif mode == "updates":
+            for update in event.values():
+                if isinstance(update, dict) and update.get("messages"):
+                    final_messages = update["messages"]
+    return {"messages": final_messages}
+
+
 @metered_reply
 async def respond_with_ai(
     message_data: dict[str, Any],
@@ -377,6 +484,9 @@ async def respond_with_ai(
     session: ChatSession,
     agent: Any,
 ) -> None:
+    stream_id = (
+        str(uuid.uuid4()) if message_data.get("supports_streaming") is True else None
+    )
     async with end_user_typing(session):
         try:
             load_app_env()
@@ -421,59 +531,21 @@ async def respond_with_ai(
                 bot_configuration_id=llm_configuration_id,
                 scoped_conversation_history=history,
             )
-            try:
-                async with create_async_chat_db_session() as chat_db:
-                    retrieval = await RetrievalPipeline(chat_db).retrieve(request)
-            except Exception as error:
-                logger.exception(
-                    "Hybrid retrieval unavailable",
-                    extra={"conversation_id": session.conversation_id},
-                )
-                # Keep counsellor requests and non-factual conversation available.
-                retrieval = RetrievalResult(
-                    status=RetrievalResultStatus.UNAVAILABLE,
-                    prepared_query=PreparedQuery(
-                        original_message=user_text,
-                        standalone_query=user_text,
-                        did_rewrite=False,
-                    ),
-                    context_bundle=None,
-                    clarification_question=None,
-                    diagnostics={
-                        "error": {
-                            "code": error.code
-                            if isinstance(error, RetrievalFailure)
-                            else "retrieval_unavailable",
-                            "stage": error.stage
-                            if isinstance(error, RetrievalFailure)
-                            else "retrieval",
-                            "message": error.message
-                            if isinstance(error, RetrievalFailure)
-                            else "Reference information could not be searched. Please try again shortly.",
-                            "action": "Retry the request or contact a counsellor.",
-                        }
-                    },
-                )
+            # Both operations use the same persisted turn but own their DB
+            # sessions. The agent needs both results; the queue still orders turns.
+            # TaskGroup also cancels and awaits both children on turn cancellation.
+            with latency_stage("turn_preparation"):
+                async with asyncio.TaskGroup() as preparation:
+                    retrieval_task = preparation.create_task(
+                        _retrieve_for_turn(request, session.conversation_id)
+                    )
+                    lead_task = preparation.create_task(
+                        _capture_lead_for_turn(session, bot_pref, message_id)
+                    )
+            retrieval = retrieval_task.result()
+            lead_capture = lead_task.result()
             bundle = retrieval.context_bundle
             has_evidence = bool(bundle and bundle.selected_candidates)
-            await log_retrieval(
-                organization_id=session.organization_id,
-                bot_id=bot_id,
-                conversation_id=uuid.UUID(str(session.conversation_id)),
-                query=retrieval.prepared_query.standalone_query,
-                result=retrieval,
-                retrieval_threshold=float(
-                    retrieval.diagnostics.get(
-                        "similarity_threshold", bot_pref["similarity_threshold"]
-                    )
-                ),
-                retrieval_k=int(
-                    retrieval.diagnostics.get("retrieval_k", bot_pref["retrieval_k"])
-                ),
-                embedding_configuration_id=embedding_configuration_id,
-                llm_configuration_id=llm_configuration_id,
-                message_id=message_id,
-            )
 
             logger.info(
                 "Starting agent invocation",
@@ -483,34 +555,59 @@ async def respond_with_ai(
                     "has_rag_context": has_evidence,
                 },
             )
-            lead_capture = {
-                "status": "unavailable",
-                "action_outcomes": [
-                    "Could not update or verify details/actions this turn. Do not claim a new save, and do not deny previously saved tasks."
-                ],
-            }
-            if message_id:
-                try:
-                    lead_capture = await capture_lead_turn(
-                        session, bot_pref, message_id
-                    )
-                except Exception:
-                    logger.exception(
-                        "Lead capture unavailable",
-                        extra={"conversation_id": session.conversation_id},
-                    )
             context = InstituteContext(
                 bot_prefs=bot_pref,
                 retrieval_result=retrieval,
                 conversation_id=uuid.UUID(str(session.conversation_id)),
                 lead_capture=lead_capture,
+                lead_question=plan_lead_question(bot_pref, lead_capture),
             )
-            with latency_stage("agent"):
-                response = await agent.ainvoke(
-                    {"messages": [HumanMessage(content=user_text)]},
-                    config=config,
-                    context=context,
-                )
+
+            async def save_retrieval():
+                try:
+                    async with asyncio.timeout(2):
+                        await log_retrieval(
+                            organization_id=session.organization_id,
+                            bot_id=bot_id,
+                            conversation_id=uuid.UUID(str(session.conversation_id)),
+                            query=retrieval.prepared_query.standalone_query,
+                            result=retrieval,
+                            retrieval_threshold=float(
+                                retrieval.diagnostics.get(
+                                    "similarity_threshold",
+                                    bot_pref["similarity_threshold"],
+                                )
+                            ),
+                            retrieval_k=int(
+                                retrieval.diagnostics.get(
+                                    "retrieval_k", bot_pref["retrieval_k"]
+                                )
+                            ),
+                            embedding_configuration_id=embedding_configuration_id,
+                            llm_configuration_id=llm_configuration_id,
+                            message_id=message_id,
+                        )
+                except TimeoutError:
+                    logger.warning("Retrieval log timed out")
+
+            async with asyncio.TaskGroup() as completion:
+                completion.create_task(save_retrieval())
+                with latency_stage("agent"):
+                    if stream_id:
+                        response = await _stream_agent(
+                            agent,
+                            {"messages": [HumanMessage(content=user_text)]},
+                            config,
+                            context,
+                            session,
+                            stream_id,
+                        )
+                    else:
+                        response = await agent.ainvoke(
+                            {"messages": [HumanMessage(content=user_text)]},
+                            config=config,
+                            context=context,
+                        )
 
             response_messages = response.get("messages", [])
             tool_calls = [
@@ -549,6 +646,7 @@ async def respond_with_ai(
                     {
                         "type": "message",
                         "message": fallback,
+                        "stream_id": stream_id,
                         "retrieval_status": retrieval.status.value,
                         "sources": [],
                         "role": "ai",
@@ -561,6 +659,7 @@ async def respond_with_ai(
             reply_payload = {
                 "type": "message",
                 "message": answer,
+                "stream_id": stream_id,
                 "retrieval_status": retrieval.status.value,
                 "sources": [
                     ref.model_dump(mode="json") for ref in bundle.source_references
@@ -573,7 +672,11 @@ async def respond_with_ai(
             await complete_current_reply(reply_payload)
             set_latency_outcome("success")
             answer_id = await send_to_end_user(reply_payload, session)
-            if answer_id and context.lead_question:
+            if (
+                answer_id
+                and context.lead_question
+                and context.lead_question[0] in answer
+            ):
                 question_text, fields = context.lead_question
                 try:
                     await record_lead_question(
@@ -588,7 +691,19 @@ async def respond_with_ai(
                         "Failed to record persisted lead question",
                         extra={"conversation_id": session.conversation_id},
                     )
+        except asyncio.CancelledError:
+            if stream_id:
+                await _send_json_safe(
+                    session.user_socket,
+                    {"type": "message_abort", "stream_id": stream_id},
+                )
+            raise
         except Exception as e:
+            if stream_id:
+                await _send_json_safe(
+                    session.user_socket,
+                    {"type": "message_abort", "stream_id": stream_id},
+                )
             from app.services.billing import BillingUnavailable
 
             if isinstance(e, BillingUnavailable):

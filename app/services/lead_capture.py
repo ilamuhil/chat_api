@@ -17,9 +17,10 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
-from sqlalchemy import select
+from sqlalchemy import and_, false, or_, select
 from sqlalchemy import update as sql_update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import aliased
 
 from app.agent.lead_capture_models import (
     Action,
@@ -49,6 +50,7 @@ from app.models.chat_db_models import Messages
 from app.models.dashboard_db_models import ConversationsMeta, LeadFollowUps, Leads
 from app.services.billing import model_callbacks
 from app.services.latency import timed_stage
+from app.services.lead_context import compact_lead_state
 from app.services.lead_merge_service import LeadMergeService, MergePolicy, SourceRecord
 
 logger = logging.getLogger(__name__)
@@ -296,6 +298,30 @@ def to_turn_update(
     )
 
 
+def compact_profile_schema() -> dict[str, Any]:
+    schema = LeadProfile.model_json_schema()
+    definitions = schema.get("$defs", {})
+
+    def compact(value):
+        if isinstance(value, dict):
+            if "$ref" in value:
+                return compact(definitions[value["$ref"].split("/")[-1]])
+            return {
+                key: compact(item)
+                for key, item in value.items()
+                if key in {"type", "enum", "anyOf", "items", "minimum", "maximum"}
+            }
+        if isinstance(value, list):
+            return [compact(item) for item in value]
+        return value
+
+    return {
+        field: compact(value)
+        for field, value in schema["properties"].items()
+        if field != "student_gender"
+    }
+
+
 @timed_stage("lead_extraction")
 async def extract_turn(
     message: Messages,
@@ -308,7 +334,7 @@ async def extract_turn(
         api_key=SecretStr(os.environ["OPENAI_API_KEY"]),
         timeout=30,
         max_retries=0,
-        max_completion_tokens=1800,
+        max_completion_tokens=900,
     )
     model.callbacks = model_callbacks()
     # JSON mode handles sparse patches and dynamic evidence maps without imposing
@@ -347,16 +373,24 @@ For specific_period, joining_preference_details must include the actual stated
 period (for example January 2027) and any study schedule constraints; do not replace
 a stated intake period with only a schedule such as weekday evenings.
 LeadProfile value schema:\n"""
-                + json.dumps(LeadProfile.model_json_schema())
-                + "\nReturn this JSON shape:\n"
-                + json.dumps(TurnExtraction.model_json_schema())
+                + json.dumps(compact_profile_schema())
+                + "\nReturn a sparse JSON object. Omit empty/default keys and unknown fields. Allowed keys: observations (list of {field, value, clear?, clear_evidence?, correction?, attribution?, uncertain?}), declined_fields (field names), intent (one enum value), course_names (explicit names only), ambiguous_course (only if true), question_resolution (answered/declined/unclear/not_addressed), action ({action_type, signal_type, requested_time_text?, details?}). Observations need only changed visitor-supplied values; do not repeat accepted values. Use attribution enquirer_self for the visitor’s own facts, student_via_enquirer for their student/child, other for another person, unclear if unknown. Never omit attribution on an observation you can attribute. Default clear/correction/uncertain are false. Do not invent evidence, IDs, empty objects or full copies of the state. An empty extraction is {}. Valid intents: "
+                + ", ".join(item.value for item in Intent)
+                + ". Valid actions: "
+                + ", ".join(item.value for item in Action)
+                + ". Valid action signals: "
+                + ", ".join(item.value for item in ActionSignalType)
             ),
             HumanMessage(
                 content=json.dumps(
                     {
                         "current_visitor_message": message.content,
-                        "accepted_state": state.model_dump(mode="json"),
-                        "previous_assistant_answer": previous_answer,
+                        "accepted_state": compact_lead_state(
+                            state.model_dump(mode="json")
+                        ),
+                        "previous_assistant_answer": previous_answer[-1200:]
+                        if previous_answer
+                        else None,
                     }
                 )
             ),
@@ -385,6 +419,38 @@ async def scoped_conversation(db, session: ChatSession, bot_id: UUID, *, lock=Fa
     if conversation is None:
         raise ValueError("Conversation is outside the current bot/organization")
     return conversation
+
+
+async def read_lead_snapshot(db, session: ChatSession, bot_id: UUID):
+    visitor_match = (
+        Leads.visitor_id == UUID(session.visitor_id) if session.visitor_id else false()
+    )
+    join = and_(
+        Leads.organization_id == session.organization_id,
+        Leads.bot_id == bot_id,
+        Leads.deleted_at.is_(None),
+        or_(
+            and_(
+                ConversationsMeta.lead_id.is_not(None),
+                Leads.id == ConversationsMeta.lead_id,
+            ),
+            and_(ConversationsMeta.lead_id.is_(None), visitor_match),
+        ),
+    )
+    row = (
+        await db.execute(
+            select(ConversationsMeta, Leads)
+            .outerjoin(Leads, join)
+            .where(
+                ConversationsMeta.id == UUID(session.conversation_id),
+                ConversationsMeta.organization_id == session.organization_id,
+                ConversationsMeta.bot_id == bot_id,
+            )
+        )
+    ).one_or_none()
+    if row is None:
+        raise ValueError("Conversation is outside the current bot/organization")
+    return row
 
 
 async def scoped_lead(db, conversation, session, bot_id, *, lock=False):
@@ -567,29 +633,33 @@ async def capture_lead_turn(
 ) -> dict[str, Any]:
     bot_id = UUID(prefs["bot_id"])
     async with create_async_chat_db_session() as db:
-        message = await db.scalar(
-            select(Messages).where(
-                Messages.id == message_id,
-                Messages.conversation_id == UUID(session.conversation_id),
-                Messages.role == "user",
-                Messages.content_type == "text",
-            )
-        )
-        if message is None or message.created_at is None:
-            raise ValueError("Visitor message was not persisted")
-        previous = await db.scalar(
-            select(Messages.content)
+        previous = aliased(Messages)
+        previous_answer = (
+            select(previous.content)
             .where(
-                Messages.conversation_id == message.conversation_id,
-                Messages.role == "ai",
-                Messages.created_at < message.created_at,
+                previous.conversation_id == Messages.conversation_id,
+                previous.role == "ai",
+                previous.created_at < Messages.created_at,
             )
-            .order_by(Messages.created_at.desc(), Messages.id.desc())
+            .order_by(previous.created_at.desc(), previous.id.desc())
             .limit(1)
+            .scalar_subquery()
         )
+        row = (
+            await db.execute(
+                select(Messages, previous_answer).where(
+                    Messages.id == message_id,
+                    Messages.conversation_id == UUID(session.conversation_id),
+                    Messages.role == "user",
+                    Messages.content_type == "text",
+                )
+            )
+        ).one_or_none()
+        if row is None or row[0].created_at is None:
+            raise ValueError("Visitor message was not persisted")
+        message, previous = row
     async with create_async_dashboard_db_session() as db:
-        conversation = await scoped_conversation(db, session, bot_id)
-        lead = await scoped_lead(db, conversation, session, bot_id)
+        conversation, lead = await read_lead_snapshot(db, session, bot_id)
         snapshot = restore_state(conversation, lead)
         profile_version = lead.profile_version if lead else None
     extraction = await extract_turn(message, snapshot, prefs, previous)
@@ -737,9 +807,6 @@ async def capture_lead_turn(
     return {
         "state": state.model_dump(mode="json"),
         "action_outcomes": outcomes,
-        "merge_decisions": [
-            decision.model_dump(mode="json") for decision in result.decisions
-        ],
     }
 
 

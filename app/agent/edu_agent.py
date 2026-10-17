@@ -11,6 +11,7 @@ from urllib.parse import quote_plus
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRequest, dynamic_prompt, wrap_model_call
 from langchain.tools import ToolRuntime
+from langchain_core.messages import HumanMessage, ToolMessage, trim_messages
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -24,6 +25,7 @@ from app.agent.lead_capture_models import LeadField
 from app.domain.chat_context import InstituteContext
 from app.infra.redis_client import redis_client
 from app.rag.shared_dataclasses import RetrievalResultStatus
+from app.services.lead_context import compact_agent_context
 from app.services.notifications import (
     create_notifications,
     publish_notifications,
@@ -78,23 +80,7 @@ def build_agent_prompt(context: InstituteContext) -> str:
     capture_leads_text = ""
 
     if context.bot_prefs.get("capture_leads"):
-        name_text = "Name" if context.bot_prefs.get("capture_name") else ""
-        email_text = "Email address" if context.bot_prefs.get("capture_email") else ""
-        phone_text = "Phone number" if context.bot_prefs.get("capture_phone") else ""
-
-        if any([name_text, email_text, phone_text]):
-            capture_leads_text = (
-                "- Collect the following details from the user naturally:\n"
-            )
-
-            if name_text:
-                capture_leads_text += f"{name_text}\n"
-
-            if email_text:
-                capture_leads_text += f"{email_text}\n"
-
-            if phone_text:
-                capture_leads_text += f"{phone_text}\n"
+        capture_leads_text = "- Ask only the prepared core identity or action-required question supplied below."
 
     retrieval = context.retrieval_result
     if retrieval and retrieval.context_bundle:
@@ -151,9 +137,11 @@ def build_agent_prompt(context: InstituteContext) -> str:
         When action_outcomes says a request is saved, explicitly acknowledge the saved
         counsellor task; do not say you lack a tool to save it. Sending the actual
         email/calling the visitor still requires the counsellor.
-        Before asking for a lead field, use prepare_lead_question with the exact
-        question and fields, then include that question verbatim in your answer.
-        Ask only enabled collection fields and respect contact refusal.
+        Ask only enabled core identity fields or information required to complete
+        an explicit visitor request. Do not collect optional age, gender, education,
+        budget or personal circumstances merely to fill a profile. Preserve volunteered
+        relevant details. Respect contact refusal. If a prepared_question is supplied,
+        include it verbatim once; otherwise do not introduce a new collection question.
         --
     """
 
@@ -170,7 +158,35 @@ def build_agent_prompt(context: InstituteContext) -> str:
         institute_desc_text=institute_desc_text,
         capture_leads_text=capture_leads_text,
         rag_context_text=rag_context_text,
-        lead_capture_text=json.dumps(context.lead_capture, ensure_ascii=False),
+        lead_capture_text=json.dumps(
+            {
+                **compact_agent_context(context.lead_capture),
+                "prepared_question": context.lead_question[0]
+                if context.lead_question
+                else None,
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+
+def is_direct_factual_question(text: str) -> bool:
+    import re
+
+    return (
+        text.isascii()
+        and bool(
+            re.match(
+                r"^(?:what|which|when|where|how|tell me|explain|list|is|are|does|do|can i apply|am i eligible)\b",
+                text.strip(),
+                re.I,
+            )
+        )
+        and not re.search(
+            r"\b(?:connect|speak|talk|human|counsellor|counselor|advisor|adviser|support|representative|someone|person|agent|transfer|escalate|staff)\b",
+            text,
+            re.I,
+        )
     )
 
 
@@ -190,6 +206,27 @@ async def select_bot_model(
 
     from app.services.billing import standard_model
 
+    latest_user = next(
+        (
+            message.content
+            for message in reversed(request.messages)
+            if isinstance(message, HumanMessage)
+        ),
+        "",
+    )
+    answer_only = bool(
+        request.messages and isinstance(request.messages[-1], ToolMessage)
+    ) or is_direct_factual_question(str(latest_user))
+    model_tags = ["final_answer"] if answer_only else ["tool_capable_answer"]
+    messages = trim_messages(
+        request.messages,
+        max_tokens=4000,
+        token_counter="approximate",
+        strategy="last",
+        start_on="human",
+        end_on=("human", "tool"),
+        allow_partial=False,
+    )
     bot_model = ChatOpenAI(
         model=standard_model(model_name),
         max_completion_tokens=500,
@@ -199,8 +236,12 @@ async def select_bot_model(
         use_responses_api=True,
         reasoning={"effort": "low"},
         output_version="responses/v1",
+        tags=model_tags,
     )
-    return await handler(request.override(model=bot_model))
+    overrides = {"model": bot_model, "messages": messages or request.messages[-1:]}
+    if answer_only:
+        overrides.update(tools=[], tool_choice=None)
+    return await handler(request.override(**overrides))
 
 
 @tool(
@@ -289,7 +330,10 @@ async def request_handover(conversation_id) -> dict[str, Any]:
             connection=redis_client,
         )
 
-        timeout_job = queue.enqueue_in(
+        import asyncio
+
+        timeout_job = await asyncio.to_thread(
+            queue.enqueue_in,
             timedelta(seconds=HANDOVER_TIMEOUT_SECONDS),
             agent_handover_timeout_handler,
             str(conversation_id),
@@ -480,7 +524,7 @@ async def initialize_agent():
             # The middleware replaces this bootstrap model using the active
             # bot's BotConfigurations record before every model call.
             model="gpt-5.6-luna",
-            tools=[agent_handover_request, prepare_lead_question],
+            tools=[agent_handover_request],
             checkpointer=checkpointer,
             middleware=[inject_prompt_context, select_bot_model],
             context_schema=InstituteContext,

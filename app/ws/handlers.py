@@ -16,7 +16,7 @@ from app.db.session import (
     create_async_dashboard_db_session,
 )
 from app.domain import ChatSession
-from app.infra.redis_store import get_data, set_data
+from app.infra.redis_store import async_get_data, async_set_data
 from app.models.chat_db_models import (
     BotConfigurations,
     EmbeddingConfigurations,
@@ -58,7 +58,7 @@ async def send_first_message_once(
     first_message: str,
     session: ChatSession,
 ) -> None:
-    if get_data(greeting_key) is True:
+    if await async_get_data(greeting_key) is True:
         return
 
     async with end_user_typing(session):
@@ -74,7 +74,7 @@ async def send_first_message_once(
                     .limit(1)
                 )
                 if existing_message:
-                    set_data(greeting_key, True, ttl=None)
+                    await async_set_data(greeting_key, True, ttl=None)
                     return
 
                 message = Messages(
@@ -100,7 +100,7 @@ async def send_first_message_once(
             session,
             persist=False,
         )
-        set_data(greeting_key, True, ttl=None)
+        await async_set_data(greeting_key, True, ttl=None)
 
 
 async def associate_lead_with_conversation(
@@ -128,7 +128,7 @@ async def associate_lead_with_conversation(
 
 
 async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | None:
-    bot_pref_raw = get_data(f"bot:{bot_id}:config")
+    bot_pref_raw = await async_get_data(f"bot:{bot_id}:config")
     if isinstance(bot_pref_raw, dict) and REQUIRED_BOT_PREF_KEYS.issubset(bot_pref_raw):
         return bot_pref_raw
 
@@ -216,7 +216,7 @@ async def load_bot_prefs(websocket: WebSocket, bot_id: Any) -> dict[str, Any] | 
                 }
             )
 
-    set_data(f"bot:{bot_id}:config", bot_pref, ttl=BOT_PREFS_TTL_SECONDS)
+    await async_set_data(f"bot:{bot_id}:config", bot_pref, ttl=BOT_PREFS_TTL_SECONDS)
     return bot_pref
 
 

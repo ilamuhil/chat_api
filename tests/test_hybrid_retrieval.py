@@ -207,7 +207,10 @@ class QueryAndSearchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rewriter_provider_failure_falls_back(self):
         req = request(
-            scoped_conversation_history=[ConversationTurn(role="user", content="CS101")]
+            original_message="And fees?",
+            scoped_conversation_history=[
+                ConversationTurn(role="user", content="CS101")
+            ],
         )
         with (
             patch.object(
@@ -222,7 +225,10 @@ class QueryAndSearchTests(unittest.IsolatedAsyncioTestCase):
             ).prepare(req)
         self.assertEqual(prepared.standalone_query, req.original_message)
         self.assertFalse(prepared.did_rewrite)
-        self.assertIn("original request", prepared.fallback_reason)
+        fallback_reason = prepared.fallback_reason
+        if fallback_reason is None:
+            self.fail("Expected a fallback reason after rewrite failure")
+        self.assertIn("original request", fallback_reason)
 
     async def test_first_turn_skips_rewrite_and_history_budget_preserves_recent_turns(
         self,
@@ -401,7 +407,11 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
 
 class ChatIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.enterContext(patch("app.services.billing.reserve_reply", new=AsyncMock(return_value=None)))
+        self.enterContext(
+            patch(
+                "app.services.billing.reserve_reply", new=AsyncMock(return_value=None)
+            )
+        )
         self.enterContext(patch("app.services.billing.finish_reply", new=AsyncMock()))
 
     async def test_history_scoped_to_checkpoint_excludes_tools_and_system(self):

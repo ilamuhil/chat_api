@@ -5,6 +5,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from app.rag.embeddings import count_tokens
+from app.rag.rewrite_decision import detect_rewrite_need
 from app.rag.shared_dataclasses import ConversationTurn, PreparedQuery, RetrievalRequest
 from app.services.billing import model_callbacks
 from app.services.latency import timed_stage
@@ -33,18 +34,27 @@ class QueryPreparer(BaseModel):
     @timed_stage("query_preparation")
     async def prepare(self, request: RetrievalRequest) -> PreparedQuery:
         try:
-            history = self._select_history(request.scoped_conversation_history)
+            decision = detect_rewrite_need(
+                request.original_message, request.scoped_conversation_history
+            )
+            history = (
+                self._select_history(request.scoped_conversation_history)
+                if decision.needs_rewrite
+                else []
+            )
             if not history:
                 return PreparedQuery(
                     original_message=request.original_message,
                     standalone_query=request.original_message,
                     did_rewrite=False,
+                    rewrite_reason=decision.reason,
                 )
             rewritten_query = await self._rewrite(history, request.original_message)
             return PreparedQuery(
                 original_message=request.original_message,
                 standalone_query=rewritten_query,
                 did_rewrite=rewritten_query != request.original_message,
+                rewrite_reason=decision.reason,
             )
 
         except Exception as exc:

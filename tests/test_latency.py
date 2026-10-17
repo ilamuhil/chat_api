@@ -32,7 +32,7 @@ class TimingTests(unittest.IsolatedAsyncioTestCase):
         prefs = {"bot_id": str(uuid4()), "llm_model": "test-model"}
         db = AsyncMock(spec=AsyncSession)
         with (
-            patch("app.services.latency.perf_counter", side_effect=[15, 20, 25]),
+            patch("app.services.latency.perf_counter", side_effect=[15, 20, 20, 25]),
             patch("app.services.latency.create_async_chat_db_session") as factory,
         ):
             factory.return_value.__aenter__ = AsyncMock(return_value=db)

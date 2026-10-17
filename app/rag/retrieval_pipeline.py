@@ -1,8 +1,10 @@
+from types import SimpleNamespace
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.infra.local_cache import configuration_cache
 from app.models.chat_db_models import BotConfigurations, EmbeddingConfigurations
 from app.rag.context_assembler import ContextAssembler
 from app.rag.hybrid_retriever import HybridRetriever
@@ -21,18 +23,39 @@ class RetrievalPipeline:
     def __init__(self, chat_session: AsyncSession):
         self.chat_session = chat_session
         self.hybrid_retriever = HybridRetriever()
+        self.organization_id: str | None = None
+        self.configuration_cache_hits = 0
 
     @timed_stage("retrieval_configuration")
     async def get_embedding_configuration(
         self, embedding_configuration_id: UUID, bot_id: UUID
     ) -> EmbeddingConfigurations | None:
-        return await self.chat_session.scalar(
+        key = (
+            "embedding",
+            self.organization_id,
+            str(bot_id),
+            str(embedding_configuration_id),
+        )
+        cached = configuration_cache.get(key) if self.organization_id else None
+        if cached is not None:
+            self.configuration_cache_hits += 1
+            return SimpleNamespace(**cached)
+        record = await self.chat_session.scalar(
             select(EmbeddingConfigurations).where(
                 EmbeddingConfigurations.id == embedding_configuration_id,
                 EmbeddingConfigurations.bot_id == bot_id,
                 EmbeddingConfigurations.state == "active",
             )
         )
+        if record is not None and self.organization_id:
+            configuration_cache.put(
+                key,
+                {
+                    field: getattr(record, field)
+                    for field in ("id", "bot_id", "state", "model", "dimension")
+                },
+            )
+        return record
 
     @timed_stage("retrieval_configuration")
     async def get_bot_configuration(
@@ -41,6 +64,17 @@ class RetrievalPipeline:
         embedding_configuration_id: UUID,
         bot_configuration_id: UUID | None = None,
     ) -> BotConfigurations | None:
+        key = (
+            "bot",
+            self.organization_id,
+            str(bot_id),
+            str(embedding_configuration_id),
+            str(bot_configuration_id),
+        )
+        cached = configuration_cache.get(key) if self.organization_id else None
+        if cached is not None:
+            self.configuration_cache_hits += 1
+            return SimpleNamespace(**cached)
         statement = select(BotConfigurations).where(
             BotConfigurations.bot_id == bot_id,
             BotConfigurations.embedding_configuration_id == embedding_configuration_id,
@@ -48,15 +82,33 @@ class RetrievalPipeline:
         )
         if bot_configuration_id is not None:
             statement = statement.where(BotConfigurations.id == bot_configuration_id)
-        return await self.chat_session.scalar(
+        record = await self.chat_session.scalar(
             statement.order_by(
                 BotConfigurations.created_at.desc(), BotConfigurations.id
             ).limit(1)
         )
+        if record is not None and self.organization_id:
+            configuration_cache.put(
+                key,
+                {
+                    field: getattr(record, field)
+                    for field in (
+                        "id",
+                        "bot_id",
+                        "state",
+                        "model",
+                        "settings",
+                        "retrieval_k",
+                        "similarity_threshold",
+                    )
+                },
+            )
+        return record
 
     @timed_stage("retrieval")
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
         """Prepare, retrieve, fuse ranks, and assemble this turn's evidence."""
+        self.organization_id = request.organization_id
         embedding_configuration = await self.get_embedding_configuration(
             request.embedding_configuration_id, request.bot_id
         )
@@ -120,6 +172,9 @@ class RetrievalPipeline:
             context_bundle=context_bundle if has_evidence else None,
             diagnostics={
                 "query_rewrite_fallback": prepared_query.fallback_reason,
+                "rewrite_reason": prepared_query.rewrite_reason,
+                "configuration_cache_hits": self.configuration_cache_hits,
+                "embedding_cache_hit": self.hybrid_retriever.embedding_cache_hit,
                 "keyword_candidate_count": len(keyword_candidates),
                 "semantic_candidate_count": len(semantic_candidates),
                 "ranked_candidate_count": len(ranked_candidates),

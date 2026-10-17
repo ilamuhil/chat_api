@@ -29,7 +29,6 @@ from app.agent.lead_capture_models import (
     QuestionRecord,
     SourceKind,
 )
-from app.agent.lead_merge_service import LeadMergeService, MergePolicy, SourceRecord
 from app.db.session import async_chat_engine, async_dashboard_db_engine
 from app.domain.chat import ChatSession
 from app.models.chat_db_models import Messages
@@ -50,6 +49,7 @@ from app.services.lead_capture import (
     record_lead_question,
     to_turn_update,
 )
+from app.services.lead_merge_service import LeadMergeService, MergePolicy, SourceRecord
 from app.services.lead_summary import SummaryText, summarize_conversation
 
 

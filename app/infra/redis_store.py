@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, cast
 
-from app.infra.redis_client import redis_client
+from app.infra.redis_client import async_redis_client, redis_client
 
 _KEY_PREFIX = "data:store:"
 _DEFAULT_TTL = 3600  # 1 hour
@@ -46,3 +46,21 @@ def delete_data(key: str) -> None:
 def data_exists(key: str) -> bool:
     """Check if data metadata exists in Redis."""
     return cast(int, redis_client.exists(_key(key))) > 0
+
+
+async def async_set_data(key: str, value: JsonValue, ttl: int | None = _DEFAULT_TTL) -> None:
+    payload = json.dumps(value)
+    if ttl is None:
+        await async_redis_client.set(_key(key), payload)
+    else:
+        await async_redis_client.setex(_key(key), ttl, payload)
+
+
+async def async_get_data(key: str) -> JsonValue | None:
+    raw = await async_redis_client.get(_key(key))
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None

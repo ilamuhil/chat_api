@@ -115,6 +115,8 @@ class BillingDatabaseTests(unittest.IsolatedAsyncioTestCase):
                 winner, {"type": "message", "message": "saved answer"}, TurnMeter()
             )
             replay = await reserve_reply(org, winner, digest)
+            if replay is None:
+                self.fail("Expected a saved response when replaying the request")
             self.assertEqual(replay["message"], "saved answer")
             with self.assertRaises(BillingUnavailable):
                 await reserve_reply(org, winner, "different-content")

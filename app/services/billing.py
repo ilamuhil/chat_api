@@ -114,6 +114,8 @@ class TurnMeter(BaseCallbackHandler):
 
     def __init__(self):
         self.calls = 0
+        self.reply_completed = False
+        self.organization_id: str | None = None
         self.estimated_tokens = 0
         self.usage: list[dict[str, Any]] = []
         self.blocked = False
@@ -345,34 +347,36 @@ async def reserve_reply(org_id: str, request_id: str, request_hash: str):
 @timed_stage("billing_finalize")
 async def finish_reply(request_id: str, response: dict | None, meter: TurnMeter):
     async with create_async_dashboard_db_session() as db:
-        row = (
+        organization_id = meter.organization_id
+        if organization_id is None:
+            organization_id = await db.scalar(
+                text("SELECT organization_id FROM billing_usage WHERE id=:id"),
+                {"id": request_id},
+            )
+        if organization_id is None:
+            return
+        # Materialize the account lock before locking usage; all quota paths
+        # keep this order, including reservation and recovery.
+        usage = (
             (
                 await db.execute(
-                    text("SELECT organization_id FROM billing_usage WHERE id=:id"),
-                    {"id": request_id},
+                    text("""
+            WITH locked_account AS MATERIALIZED (
+                SELECT organization_id FROM billing_accounts
+                WHERE organization_id=:org FOR UPDATE
+            )
+            SELECT u.* FROM locked_account a
+            JOIN billing_usage u ON u.organization_id=a.organization_id
+            WHERE u.id=:id FOR UPDATE OF u
+        """),
+                    {"org": organization_id, "id": request_id},
                 )
             )
             .mappings()
             .first()
         )
-        if not row:
+        if usage is None:
             return
-        await db.execute(
-            text(
-                "SELECT organization_id FROM billing_accounts WHERE organization_id=:org FOR UPDATE"
-            ),
-            {"org": row["organization_id"]},
-        )
-        usage = (
-            (
-                await db.execute(
-                    text("SELECT * FROM billing_usage WHERE id=:id FOR UPDATE"),
-                    {"id": request_id},
-                )
-            )
-            .mappings()
-            .one()
-        )
         if usage["status"] != "reserved":
             return
         completed = response is not None
@@ -411,6 +415,7 @@ async def complete_current_reply(payload: dict):
     meter = current_meter.get()
     if request_id and meter:
         await finish_reply(request_id, payload, meter)
+        meter.reply_completed = True
 
 
 async def reserve_auxiliary(org_id: str, key: str) -> bool:
@@ -496,6 +501,7 @@ def metered_reply(function):
         request_id = f"reply:{session.conversation_id}:{raw_id}"
         content = str(message_data.get("message") or message_data.get("content") or "")
         meter = TurnMeter()
+        meter.organization_id = session.organization_id
         token = None
         reservation_token = None
         try:
@@ -553,8 +559,11 @@ def metered_reply(function):
                 mark_response_sent({"type": "ai_unavailable"})
         finally:
             if reservation_token is not None:
-                await finish_reply(request_id, None, meter)
-                current_reservation.reset(reservation_token)
+                try:
+                    if not meter.reply_completed:
+                        await finish_reply(request_id, None, meter)
+                finally:
+                    current_reservation.reset(reservation_token)
             if token is not None:
                 current_meter.reset(token)
 

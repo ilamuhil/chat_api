@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import re
 
@@ -6,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.infra.local_cache import embedding_cache
 from app.models.chat_db_models import (
     Documents,
     EmbeddingConfigurations,
@@ -216,6 +218,8 @@ def expand_keyword_query(query: str) -> tuple[list[str], list[str]]:
 
 
 class HybridRetriever(BaseModel):
+    embedding_cache_hit: bool = False
+
     @timed_stage("keyword_search")
     async def keyword_search(
         self,
@@ -350,11 +354,23 @@ class HybridRetriever(BaseModel):
         if not 0.0 <= similarity_threshold <= 1.0:
             raise ValueError("Similarity threshold must be between 0 and 1.")
 
-        query_embedding = await self.embed_query(
-            query,
+        key = (
+            request.organization_id,
+            str(request.bot_id),
+            str(embedding_configuration.id),
             embedding_configuration.model,
             embedding_configuration.dimension,
+            hashlib.sha256(query.encode()).hexdigest(),
         )
+        query_embedding = embedding_cache.get(key)
+        self.embedding_cache_hit = query_embedding is not None
+        if query_embedding is None:
+            query_embedding = await self.embed_query(
+                query,
+                embedding_configuration.model,
+                embedding_configuration.dimension,
+            )
+            embedding_cache.put(key, query_embedding)
 
         distance = Embeddings.embedding.cosine_distance(query_embedding)
 

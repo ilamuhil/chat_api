@@ -88,6 +88,8 @@ class PreparedQuery(BaseModel):
         ..., description="Whether the message was rewritten by the system."
     )
 
+    rewrite_reason: str | None = None
+
 
 class RetrievalRequest(BaseModel):
     """Input required to perform retrieval for a user message.

@@ -19,6 +19,8 @@ def get_redis() -> Redis:
 
 # Optional shared client for app usage.
 redis_client = get_redis()
+# Dedicated shared pool for non-blocking request-path commands. Pub/sub owns its own client.
+async_redis_client = AsyncRedis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=2, socket_timeout=2)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_async_chat_db
+from app.infra.local_cache import configuration_cache
 from app.models.chat_db_models import BotConfigurations, EmbeddingConfigurations
 from app.services.billing import STANDARD_MODEL
 
@@ -83,6 +84,7 @@ async def create_model_config(
         await chat_db.flush()
         config_id = bot_configuration.id
         await chat_db.commit()
+        configuration_cache.invalidate_bot(str(bot_uuid))
         return ModelConfigCreateResponse(config_id=config_id)
     except ValueError:
         await chat_db.rollback()

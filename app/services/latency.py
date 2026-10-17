@@ -54,13 +54,16 @@ def latency_stage(name: str) -> Iterator[None]:
                 timing.stages.get(name, 0.0) + (perf_counter() - started) * 1000
             )
 
+
 def timed_stage(name: str):
     def decorate(function):
         @wraps(function)
         async def wrapped(*args, **kwargs):
             with latency_stage(name):
                 return await function(*args, **kwargs)
+
         return wrapped
+
     return decorate
 
 
@@ -70,6 +73,11 @@ def set_latency_outcome(outcome: str) -> None:
 
 
 def mark_response_sent(payload: dict[str, Any]) -> None:
+    if payload.get("type") == "message_delta" or payload.get("role") == "ai":
+        if timing := current_latency.get():
+            timing.stages.setdefault(
+                "time_to_first_text", (perf_counter() - timing.received_at) * 1000
+            )
     if payload.get("role") == "ai" or payload.get("type") in {
         "error",
         "ai_unavailable",
@@ -133,4 +141,11 @@ async def track_turn(
         raise
     finally:
         current_latency.reset(token)
-        await persist_latency(timing, session, bot_pref)
+        # A peer may close immediately after typing=False. Finish the bounded
+        # telemetry save even when disconnect cleanup cancels the turn worker.
+        persistence = asyncio.create_task(persist_latency(timing, session, bot_pref))
+        try:
+            await asyncio.shield(persistence)
+        except asyncio.CancelledError:
+            await persistence
+            raise
