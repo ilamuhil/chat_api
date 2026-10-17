@@ -230,6 +230,17 @@ async def chat(websocket: WebSocket):
                             str(file_key),
                             "file",
                         )
+                    if session.mode == "human":
+                        await send_to_support_agent(
+                            {
+                                **message_data,
+                                "role": "user",
+                                "conversation_id": session.conversation_id,
+                                "content_type": message_data.get("mime_type", "file"),
+                                "file_url": message_data.get("file_url"),
+                            },
+                            session,
+                        )
                     await send_to_end_user(
                         {
                             "type": "message",
