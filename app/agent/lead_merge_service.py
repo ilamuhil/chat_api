@@ -37,22 +37,50 @@ from app.agent.lead_capture_models import (
 
 
 class SourceRecord(ContractModel):
-    """Trusted event metadata loaded by the application, scoped to this chat."""
+    """Trusted event metadata loaded by the application, scoped to this chat.
 
-    source_id: NonBlank
-    conversation_id: UUID
-    source_kind: SourceKind
-    observed_at: AwareDatetime
+    Attributes:
+        source_id: Stable identifier for the persisted source event.
+        conversation_id: Conversation the event belongs to.
+        source_kind: How the event was captured (message, form, etc.).
+        observed_at: When the event occurred (timezone-aware).
+    """
+
+    source_id: NonBlank = Field(
+        description="Stable identifier for the persisted source event."
+    )
+    conversation_id: UUID = Field(
+        description="Conversation the source event belongs to."
+    )
+    source_kind: SourceKind = Field(
+        description="How the event was captured (message, form, etc.)."
+    )
+    observed_at: AwareDatetime = Field(
+        description="When the event occurred (timezone-aware)."
+    )
 
 
 class MergePolicy(ContractModel):
-    capture_leads: bool = True
+    """Configurable rules for which profile fields may be merged.
+
+    Attributes:
+        capture_leads: When false, new profile values are rejected (clears still allowed).
+        enabled_fields: Subset of ``LeadField`` that may be collected for this bot.
+    """
+
+    capture_leads: bool = Field(
+        default=True,
+        description="When false, new profile values are rejected (clears still allowed).",
+    )
     enabled_fields: set[LeadField] = Field(
-        default_factory=lambda: set(LeadField) - {LeadField.STUDENT_GENDER}
+        default_factory=lambda: set(LeadField) - {LeadField.STUDENT_GENDER},
+        description="Profile fields that may be collected for this bot.",
     )
 
 
 class MergeStatus(StrEnum):
+    """Outcome of applying one merge operation to the lead state."""
+
     ACCEPTED = "accepted"
     UNCHANGED = "unchanged"
     REJECTED = "rejected"
@@ -61,28 +89,81 @@ class MergeStatus(StrEnum):
 
 
 class MergeDecision(ContractModel):
-    category: NonBlank
-    status: MergeStatus
-    reason: NonBlank
-    field: LeadField | None = None
-    previous_value: FactValue = None
-    proposed_value: FactValue = None
+    """Single auditable decision from ``LeadMergeService.merge``.
+
+    Attributes:
+        category: Area affected (profile, intent, decline, question, action, scope).
+        status: Whether the operation was applied, deferred, or rejected.
+        reason: Human-readable explanation for logs and debugging.
+        field: Profile field involved, when applicable.
+        previous_value: Value before the merge attempt.
+        proposed_value: Value or clear proposed by the turn update.
+    """
+
+    category: NonBlank = Field(
+        description="Area affected (profile, intent, decline, question, action, scope)."
+    )
+    status: MergeStatus = Field(
+        description="Whether the operation was applied or rejected."
+    )
+    reason: NonBlank = Field(
+        description="Human-readable explanation for logs and debugging."
+    )
+    field: LeadField | None = Field(
+        default=None, description="Profile field involved, when applicable."
+    )
+    previous_value: FactValue = Field(
+        default=None, description="Value before the merge attempt."
+    )
+    proposed_value: FactValue = Field(
+        default=None, description="Value or clear proposed by the turn update."
+    )
 
 
 class LeadMergeResult(ContractModel):
-    state: LeadCaptureState
-    decisions: list[MergeDecision] = Field(default_factory=list)
-    new_conflicts: list[ConflictRecord] = Field(default_factory=list)
-    action_signals_to_handle: list[ActionSignal] = Field(default_factory=list)
-    pending_action_requires_review: bool = False
-    state_changed: bool = False
+    """Output of ``LeadMergeService.merge``; inputs are never mutated.
+
+    Attributes:
+        state: Updated lead capture state (revision bumped when ``state_changed``).
+        decisions: Per-operation merge outcomes in processing order.
+        new_conflicts: Conflicts added during this merge.
+        action_signals_to_handle: Validated signals for the action handler to execute.
+        pending_action_requires_review: Contact action blocked by consent refusal.
+        state_changed: Whether persisted state differs from the input snapshot.
+    """
+
+    state: LeadCaptureState = Field(
+        description="Updated lead capture state after merge."
+    )
+    decisions: list[MergeDecision] = Field(
+        default_factory=list,
+        description="Per-operation merge outcomes in processing order.",
+    )
+    new_conflicts: list[ConflictRecord] = Field(
+        default_factory=list,
+        description="Conflicts added during this merge.",
+    )
+    action_signals_to_handle: list[ActionSignal] = Field(
+        default_factory=list,
+        description="Validated signals for the action handler to execute.",
+    )
+    pending_action_requires_review: bool = Field(
+        default=False,
+        description="True when a contact action is blocked by consent refusal.",
+    )
+    state_changed: bool = Field(
+        default=False,
+        description="Whether persisted state differs from the input snapshot.",
+    )
 
     @property
     def accepted_changes(self) -> list[MergeDecision]:
+        """Decisions with status ``ACCEPTED``."""
         return [d for d in self.decisions if d.status == MergeStatus.ACCEPTED]
 
     @property
     def rejected_changes(self) -> list[MergeDecision]:
+        """Decisions with status ``REJECTED``."""
         return [d for d in self.decisions if d.status == MergeStatus.REJECTED]
 
 
@@ -122,6 +203,16 @@ def _latest(evidence: list[FieldEvidence]):
 
 
 class LeadMergeService:
+    """Deterministically merges extractor output into ``LeadCaptureState``.
+
+    Attributes:
+        policy: Field collection and capture toggles.
+        claim_verifier: Optional callback to reject semantically invalid claims.
+    """
+
+    policy: MergePolicy
+    claim_verifier: ClaimVerifier | None
+
     def __init__(
         self,
         policy: MergePolicy | None = None,

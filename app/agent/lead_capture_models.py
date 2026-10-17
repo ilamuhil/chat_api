@@ -25,10 +25,14 @@ FactValue = str | int | bool | None
 
 
 class ContractModel(BaseModel):
+    """Base Pydantic model: rejects unknown fields (strict extractor contracts)."""
+
     model_config = ConfigDict(extra="forbid")
 
 
 class EnquirerType(StrEnum):
+    """Who is speaking in the conversation (student, parent, etc.)."""
+
     STUDENT = "student"
     PARENT = "parent"
     GUARDIAN = "guardian"
@@ -36,18 +40,24 @@ class EnquirerType(StrEnum):
 
 
 class StudentGender(StrEnum):
+    """Student gender as reported by the enquirer."""
+
     MALE = "male"
     FEMALE = "female"
     OTHER = "other"
 
 
 class PreferredMode(StrEnum):
+    """Preferred study delivery mode."""
+
     ONLINE = "online"
     OFFLINE = "offline"
     HYBRID = "hybrid"
 
 
 class JoiningTimeline(StrEnum):
+    """When the enquirer wants to start; map visitor phrasing to one value."""
+
     AS_SOON_AS_POSSIBLE = "as_soon_as_possible"
     NEXT_AVAILABLE_INTAKE = "next_available_intake"
     NEXT_ACADEMIC_YEAR = "next_academic_year"
@@ -56,6 +66,8 @@ class JoiningTimeline(StrEnum):
 
 
 class LeadField(StrEnum):
+    """Keys for profile fields, patches, evidence, and merge decisions."""
+
     NAME = "name"
     EMAIL = "email"
     PHONE = "phone"
@@ -72,21 +84,49 @@ class LeadField(StrEnum):
 
 
 class LeadProfile(ContractModel):
-    name: NonBlank | None = None
-    email: str | None = None
-    phone: str | None = None
-    enquirer_type: EnquirerType | None = None
-    student_name: NonBlank | None = None
-    student_age: Annotated[int | None, Field(gt=0, strict=True)] = None
-    student_gender: StudentGender | None = None
-    course_interest: NonBlank | None = None
-    education_level: NonBlank | None = None
-    preferred_mode: PreferredMode | None = None
-    joining_timeline: JoiningTimeline | None = None
-    joining_preference_details: NonBlank | None = None
+    """Captured facts about the enquirer and student (all fields optional until set)."""
+
+    name: NonBlank | None = Field(default=None, description="Enquirer's name.")
+    email: str | None = Field(
+        default=None, description="Contact email (syntax check only, not verified)."
+    )
+    phone: str | None = Field(
+        default=None, description="Contact phone (10–15 digits, optional leading +)."
+    )
+    enquirer_type: EnquirerType | None = Field(
+        default=None, description="Relationship of the speaker to the student."
+    )
+    student_name: NonBlank | None = Field(
+        default=None, description="Student's name when enquirer is not the student."
+    )
+    student_age: Annotated[
+        int | None, Field(gt=0, strict=True, description="Student age in years.")
+    ] = None
+    student_gender: StudentGender | None = Field(
+        default=None, description="Student gender as reported."
+    )
+    course_interest: NonBlank | None = Field(
+        default=None, description="Course or program the family is interested in."
+    )
+    education_level: NonBlank | None = Field(
+        default=None, description="Current or target education level."
+    )
+    preferred_mode: PreferredMode | None = Field(
+        default=None, description="Preferred online, offline, or hybrid study mode."
+    )
+    joining_timeline: JoiningTimeline | None = Field(
+        default=None, description="When they want to start (ASAP, next intake, etc.)."
+    )
+    joining_preference_details: NonBlank | None = Field(
+        default=None,
+        description="Free-text detail for ``specific_period`` or similar timelines.",
+    )
     consent_to_contact: Annotated[
         bool | None,
-        Field(strict=True, description="Unknown, granted, or refused/revoked"),
+        Field(
+            strict=True,
+            description="Unknown, granted, or refused/revoked contact consent.",
+        ),
     ] = None
 
     @field_validator("email", "phone", mode="before")
@@ -117,6 +157,8 @@ class LeadProfile(ContractModel):
 
 
 class SourceKind(StrEnum):
+    """Type of persisted event that supports a field claim."""
+
     VISITOR_MESSAGE = "visitor_message"
     FORM_SUBMISSION = "form_submission"
     CONSENT_EVENT = "consent_event"
@@ -124,6 +166,8 @@ class SourceKind(StrEnum):
 
 
 class Attribution(StrEnum):
+    """Who the extracted fact is attributed to."""
+
     ENQUIRER_SELF = "enquirer_self"
     STUDENT_VIA_ENQUIRER = "student_via_enquirer"
     OTHER = "other"
@@ -131,18 +175,40 @@ class Attribution(StrEnum):
 
 
 class FieldEvidence(ContractModel):
-    source_id: NonBlank
-    source_kind: SourceKind
-    observed_at: AwareDatetime
-    attribution: Attribution
-    uncertain: Annotated[bool, Field(strict=True)]
+    """Provenance for one extracted fact, tied to a trusted source event."""
+
+    source_id: NonBlank = Field(
+        description="ID of the trusted source record (message, form, etc.)."
+    )
+    source_kind: SourceKind = Field(description="Kind of source event.")
+    observed_at: AwareDatetime = Field(
+        description="When the fact was observed (timezone-aware)."
+    )
+    attribution: Attribution = Field(description="Who the fact is attributed to.")
+    uncertain: Annotated[
+        bool, Field(strict=True, description="True if extraction confidence is low.")
+    ]
 
 
 class LeadPatch(ContractModel):
-    set_values: LeadProfile = Field(default_factory=LeadProfile)
-    clear_fields: list[LeadField] = Field(default_factory=list)
-    corrected_fields: list[LeadField] = Field(default_factory=list)
-    evidence: dict[LeadField, list[FieldEvidence]] = Field(default_factory=dict)
+    """One batch of profile set/clear operations with evidence."""
+
+    set_values: LeadProfile = Field(
+        default_factory=LeadProfile,
+        description="Profile fields to set (only provided keys are changed).",
+    )
+    clear_fields: list[LeadField] = Field(
+        default_factory=list,
+        description="Profile fields to clear explicitly.",
+    )
+    corrected_fields: list[LeadField] = Field(
+        default_factory=list,
+        description="Fields replaced despite an existing different value.",
+    )
+    evidence: dict[LeadField, list[FieldEvidence]] = Field(
+        default_factory=dict,
+        description="Supporting evidence per changed field.",
+    )
 
     @property
     def changed_fields(self) -> set[LeadField]:
@@ -179,6 +245,8 @@ class LeadPatch(ContractModel):
 
 
 class Intent(StrEnum):
+    """Classified goal of the visitor's current request."""
+
     UNKNOWN = "unknown"
     COURSE_INFO = "course_info"
     COURSE_RECOMMENDATION = "course_recommendation"
@@ -195,6 +263,8 @@ class Intent(StrEnum):
 
 
 class QuestionResolution(StrEnum):
+    """How a pending bot question was addressed this turn."""
+
     ANSWERED = "answered"
     DECLINED = "declined"
     UNCLEAR = "unclear"
@@ -202,18 +272,34 @@ class QuestionResolution(StrEnum):
 
 
 class QuestionRecord(ContractModel):
-    text: NonBlank
-    target_fields: list[LeadField] = Field(default_factory=list)
-    message_id: UUID
-    asked_at: AwareDatetime
+    """Assistant question asked to collect specific profile fields."""
+
+    text: NonBlank = Field(description="Question text shown to the visitor.")
+    target_fields: list[LeadField] = Field(
+        default_factory=list,
+        description="Profile fields this question is trying to collect.",
+    )
+    message_id: UUID = Field(description="Persisted assistant message ID.")
+    asked_at: AwareDatetime = Field(
+        description="When the question was asked (timezone-aware)."
+    )
 
 
 class CourseScopeRecord(ContractModel):
-    """Discussion scope, not a declaration of the student's course selection."""
+    """Discussion scope for courses mentioned; not the student's committed choice."""
 
-    course_names: list[NonBlank] = Field(default_factory=list)
-    ambiguous: Annotated[bool, Field(strict=True)] = False
-    evidence: list[FieldEvidence] = Field(default_factory=list)
+    course_names: list[NonBlank] = Field(
+        default_factory=list,
+        description="Course names under discussion this turn.",
+    )
+    ambiguous: Annotated[
+        bool,
+        Field(strict=True, description="True if scope is unclear or multi-course."),
+    ] = False
+    evidence: list[FieldEvidence] = Field(
+        default_factory=list,
+        description="Evidence supporting the scope update.",
+    )
 
     @model_validator(mode="after")
     def require_evidence(self) -> Self:
@@ -223,21 +309,39 @@ class CourseScopeRecord(ContractModel):
 
 
 class ConflictRecord(ContractModel):
-    field: LeadField
-    accepted_value: FactValue
-    proposed_value: FactValue
-    accepted_evidence: list[FieldEvidence] = Field(default_factory=list)
-    proposed_evidence: list[FieldEvidence] = Field(min_length=1)
-    reason: NonBlank
+    """Unresolved disagreement between accepted and proposed profile values."""
+
+    field: LeadField = Field(description="Profile field in conflict.")
+    accepted_value: FactValue = Field(description="Currently accepted value.")
+    proposed_value: FactValue = Field(
+        description="New value without explicit correction."
+    )
+    accepted_evidence: list[FieldEvidence] = Field(
+        default_factory=list,
+        description="Evidence for the accepted value.",
+    )
+    proposed_evidence: list[FieldEvidence] = Field(
+        min_length=1,
+        description="Evidence for the proposed value.",
+    )
+    reason: NonBlank = Field(description="Why the conflict was recorded.")
 
 
 class CurrentRequest(ContractModel):
-    intent: Intent
-    description: NonBlank | None = None
-    evidence: list[FieldEvidence] = Field(min_length=1)
+    """Visitor's active conversational goal for this thread."""
+
+    intent: Intent = Field(description="Classified intent for the current request.")
+    description: NonBlank | None = Field(
+        default=None, description="Optional human-readable summary of the request."
+    )
+    evidence: list[FieldEvidence] = Field(
+        min_length=1, description="Evidence supporting the intent classification."
+    )
 
 
 class Action(StrEnum):
+    """Follow-up operations the visitor may request (callback, demo, etc.)."""
+
     SCHEDULE_CALLBACK = "schedule_callback"
     SCHEDULE_DEMO = "schedule_demo"
     SCHEDULE_CAMPUS_VISIT = "schedule_campus_visit"
@@ -249,23 +353,38 @@ class Action(StrEnum):
 
 
 class ActionSignalType(StrEnum):
+    """Whether an action was requested, modified, or cancelled."""
+
     REQUESTED = "requested"
     CANCELLED = "cancelled"
     MODIFIED = "modified"
 
 
 class ActionSignal(ContractModel):
-    """AI-proposed signal; does not establish a saved or confirmed action."""
+    """AI-proposed action signal; does not persist until the handler accepts it."""
 
-    action_type: Action
-    signal_type: ActionSignalType
-    request_id: UUID | None = None  # Existing request only; application checks it.
-    requested_time_text: NonBlank | None = None
-    details: NonBlank | None = None
-    evidence: list[FieldEvidence] = Field(min_length=1)
+    action_type: Action = Field(description="Kind of follow-up action.")
+    signal_type: ActionSignalType = Field(
+        description="Requested, modified, or cancelled."
+    )
+    request_id: UUID | None = Field(
+        default=None,
+        description="Existing pending request ID (required for modify/cancel).",
+    )
+    requested_time_text: NonBlank | None = Field(
+        default=None, description="Visitor's natural-language time preference."
+    )
+    details: NonBlank | None = Field(
+        default=None, description="Extra details for the action."
+    )
+    evidence: list[FieldEvidence] = Field(
+        min_length=1, description="Evidence supporting this signal."
+    )
 
 
 class ActionStatus(StrEnum):
+    """Lifecycle state of a pending or completed action."""
+
     AWAITING_DETAILS = "awaiting_details"
     REQUEST_SAVED = "request_saved"
     CONFIRMED = "confirmed"
@@ -277,16 +396,35 @@ class ActionStatus(StrEnum):
 class PendingAction(ContractModel):
     """Application-managed validated request, not an extractor output."""
 
-    request_id: UUID  # Generated by application, retained across retries.
-    action_type: Action
-    status: ActionStatus = ActionStatus.AWAITING_DETAILS
-    requested_time_text: NonBlank | None = None
-    scheduled_for: AwareDatetime | None = None
-    timezone: NonBlank | None = None  # IANA name checked by the scheduling service.
-    details: NonBlank | None = None
-    evidence: list[FieldEvidence] = Field(min_length=1)
-    follow_up_id: UUID | None = None
-    event_id: NonBlank | None = None
+    request_id: UUID = Field(
+        description="Application-generated ID retained across retries."
+    )
+    action_type: Action = Field(description="Kind of follow-up action.")
+    status: ActionStatus = Field(
+        default=ActionStatus.AWAITING_DETAILS,
+        description="Current lifecycle state of the action.",
+    )
+    requested_time_text: NonBlank | None = Field(
+        default=None, description="Visitor's natural-language time preference."
+    )
+    scheduled_for: AwareDatetime | None = Field(
+        default=None, description="Resolved schedule time when known."
+    )
+    timezone: NonBlank | None = Field(
+        default=None, description="IANA timezone name for scheduling."
+    )
+    details: NonBlank | None = Field(
+        default=None, description="Extra details for the action."
+    )
+    evidence: list[FieldEvidence] = Field(
+        min_length=1, description="Evidence from when the action was requested."
+    )
+    follow_up_id: UUID | None = Field(
+        default=None, description="Persisted follow-up record ID when saved."
+    )
+    event_id: NonBlank | None = Field(
+        default=None, description="Calendar or external event ID when scheduled."
+    )
 
     @model_validator(mode="after")
     def require_operation_evidence(self) -> Self:
@@ -301,12 +439,18 @@ class PendingAction(ContractModel):
 class ActionOutcome(ContractModel):
     """Reconcile against persisted operations; model output alone proves nothing."""
 
-    request_id: UUID
-    action_type: Action
-    status: ActionStatus
-    event_id: NonBlank | None = None
-    follow_up_id: UUID | None = None
-    details: NonBlank | None = None
+    request_id: UUID = Field(description="Action request this outcome refers to.")
+    action_type: Action = Field(description="Kind of follow-up action.")
+    status: ActionStatus = Field(description="Final or intermediate action status.")
+    event_id: NonBlank | None = Field(
+        default=None, description="Calendar or external event ID when scheduled."
+    )
+    follow_up_id: UUID | None = Field(
+        default=None, description="Persisted follow-up record ID."
+    )
+    details: NonBlank | None = Field(
+        default=None, description="Outcome details from the handler."
+    )
 
     @model_validator(mode="after")
     def require_operation_evidence(self) -> Self:
@@ -319,14 +463,37 @@ class ActionOutcome(ContractModel):
 
 
 class LeadTurnUpdate(ContractModel):
-    patches: list[LeadPatch] = Field(default_factory=list)
-    observed_intent: Intent | None = None
-    intent_evidence: list[FieldEvidence] = Field(default_factory=list)
-    declined_fields: dict[LeadField, list[FieldEvidence]] = Field(default_factory=dict)
-    course_scope_update: CourseScopeRecord | None = None
-    question_resolution: QuestionResolution | None = None
-    question_resolution_evidence: list[FieldEvidence] = Field(default_factory=list)
-    action_signals: list[ActionSignal] = Field(default_factory=list)
+    """Extractor output for one conversation turn (validated before merge)."""
+
+    patches: list[LeadPatch] = Field(
+        default_factory=list,
+        description="Profile field updates proposed this turn.",
+    )
+    observed_intent: Intent | None = Field(
+        default=None, description="Classified intent for this turn, if any."
+    )
+    intent_evidence: list[FieldEvidence] = Field(
+        default_factory=list,
+        description="Evidence for ``observed_intent``.",
+    )
+    declined_fields: dict[LeadField, list[FieldEvidence]] = Field(
+        default_factory=dict,
+        description="Fields the visitor refused to provide, with evidence.",
+    )
+    course_scope_update: CourseScopeRecord | None = Field(
+        default=None, description="Updated course discussion scope, if any."
+    )
+    question_resolution: QuestionResolution | None = Field(
+        default=None, description="How the pending question was addressed."
+    )
+    question_resolution_evidence: list[FieldEvidence] = Field(
+        default_factory=list,
+        description="Evidence for question resolution.",
+    )
+    action_signals: list[ActionSignal] = Field(
+        default_factory=list,
+        description="Action request/modify/cancel signals this turn.",
+    )
 
     @model_validator(mode="after")
     def validate_turn(self) -> Self:
@@ -368,19 +535,51 @@ class LeadTurnUpdate(ContractModel):
 class LeadCaptureState(ContractModel):
     """Application-managed conversation state, restored before extraction."""
 
-    conversation_id: UUID
-    lead_id: UUID | None = None
-    revision: Annotated[int, Field(ge=0, strict=True)] = 0
-    profile: LeadProfile = Field(default_factory=LeadProfile)
-    field_evidence: dict[LeadField, list[FieldEvidence]] = Field(default_factory=dict)
-    asked_fields: dict[LeadField, list[QuestionRecord]] = Field(default_factory=dict)
-    declined_fields: dict[LeadField, list[FieldEvidence]] = Field(default_factory=dict)
-    pending_question: QuestionRecord | None = None
-    unresolved_conflicts: list[ConflictRecord] = Field(default_factory=list)
-    active_course_scope: CourseScopeRecord = Field(default_factory=CourseScopeRecord)
-    current_request: CurrentRequest | None = None
-    # MVP: one active action; sequential requests must not silently replace it.
-    pending_action: PendingAction | None = None
+    conversation_id: UUID = Field(
+        description="Conversation this lead state belongs to."
+    )
+    lead_id: UUID | None = Field(
+        default=None, description="Dashboard lead row ID when linked."
+    )
+    revision: Annotated[
+        int,
+        Field(
+            ge=0, strict=True, description="Optimistic-lock revision; bump on change."
+        ),
+    ] = 0
+    profile: LeadProfile = Field(
+        default_factory=LeadProfile, description="Accepted profile field values."
+    )
+    field_evidence: dict[LeadField, list[FieldEvidence]] = Field(
+        default_factory=dict,
+        description="Provenance per accepted profile field.",
+    )
+    asked_fields: dict[LeadField, list[QuestionRecord]] = Field(
+        default_factory=dict,
+        description="History of questions asked per field.",
+    )
+    declined_fields: dict[LeadField, list[FieldEvidence]] = Field(
+        default_factory=dict,
+        description="Refusals to answer, with evidence.",
+    )
+    pending_question: QuestionRecord | None = Field(
+        default=None, description="Open bot question awaiting an answer."
+    )
+    unresolved_conflicts: list[ConflictRecord] = Field(
+        default_factory=list,
+        description="Profile value conflicts not yet resolved.",
+    )
+    active_course_scope: CourseScopeRecord = Field(
+        default_factory=CourseScopeRecord,
+        description="Courses currently under discussion.",
+    )
+    current_request: CurrentRequest | None = Field(
+        default=None, description="Visitor's active classified request."
+    )
+    pending_action: PendingAction | None = Field(
+        default=None,
+        description="Single in-flight action (MVP: one active action per conversation).",
+    )
 
     @model_validator(mode="after")
     def validate_state_evidence(self) -> Self:
@@ -396,18 +595,47 @@ class LeadCaptureState(ContractModel):
 
 
 class ConversationLeadSummary(ContractModel):
-    conversation_id: UUID
-    state_revision: Annotated[int, Field(ge=0, strict=True)]
-    through_message_id: UUID | None = None
-    generated_at: AwareDatetime
-    fact_patches: list[LeadPatch] = Field(default_factory=list)
-    primary_intent: Intent | None = None
-    summary: NonBlank
-    unresolved_questions: list[NonBlank] = Field(default_factory=list)
-    unresolved_conflicts: list[ConflictRecord] = Field(default_factory=list)
-    action_outcomes: list[ActionOutcome] = Field(default_factory=list)
-    recommended_next_action: Action | None = None
-    recommendation_reason: NonBlank | None = None
+    """Counsellor-facing rollup generated from lead capture state."""
+
+    conversation_id: UUID = Field(description="Conversation summarized.")
+    state_revision: Annotated[
+        int,
+        Field(
+            ge=0, strict=True, description="Lead state revision this summary reflects."
+        ),
+    ]
+    through_message_id: UUID | None = Field(
+        default=None, description="Last message included in the summary, if bounded."
+    )
+    generated_at: AwareDatetime = Field(
+        description="When the summary was generated (timezone-aware)."
+    )
+    fact_patches: list[LeadPatch] = Field(
+        default_factory=list,
+        description="Fact changes included in this summary window.",
+    )
+    primary_intent: Intent | None = Field(
+        default=None, description="Dominant visitor intent in the window."
+    )
+    summary: NonBlank = Field(description="Narrative summary for counsellors.")
+    unresolved_questions: list[NonBlank] = Field(
+        default_factory=list,
+        description="Questions still open after the window.",
+    )
+    unresolved_conflicts: list[ConflictRecord] = Field(
+        default_factory=list,
+        description="Conflicts still open after the window.",
+    )
+    action_outcomes: list[ActionOutcome] = Field(
+        default_factory=list,
+        description="Action handler outcomes in the window.",
+    )
+    recommended_next_action: Action | None = Field(
+        default=None, description="Suggested follow-up action for staff."
+    )
+    recommendation_reason: NonBlank | None = Field(
+        default=None, description="Why the next action was recommended."
+    )
 
     @model_validator(mode="after")
     def validate_summary(self) -> Self:
