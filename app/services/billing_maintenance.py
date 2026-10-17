@@ -15,7 +15,7 @@ from app.db.session import (
     create_async_dashboard_db_session,
 )
 from app.infra.r2_storage import r2_delete_object
-from app.models.chat_db_models import Messages, RetrievalLogs
+from app.models.chat_db_models import Messages, ResponseLatency, RetrievalLogs
 from app.models.dashboard_db_models import (
     BillingNotice,
     ConversationsMeta,
@@ -36,7 +36,8 @@ async def recover_stale_reservations(org_id: str | None = None):
                 await db.execute(
                     text(
                         "SELECT id,organization_id,kind FROM billing_usage WHERE status='reserved' AND (CAST(:org AS text) IS NULL OR organization_id=:org) AND ((kind IN ('reply','summary') AND created_at<now()-interval '10 minutes') OR (kind='training' AND created_at<now()-interval '45 minutes')) LIMIT 100"
-                    ), {"org": org_id}
+                    ),
+                    {"org": org_id},
                 )
             )
             .mappings()
@@ -212,6 +213,11 @@ async def retain_organization(org_id, account):
         candidates = [id for id in candidates if str(id) not in failed]
     if candidates:
         async with create_async_chat_db_session() as chat:
+            await chat.execute(
+                delete(ResponseLatency).where(
+                    ResponseLatency.conversation_id.in_(candidates)
+                )
+            )
             await chat.execute(
                 delete(RetrievalLogs).where(
                     RetrievalLogs.conversation_id.in_(candidates)

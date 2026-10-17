@@ -16,6 +16,7 @@ from app.rag.shared_dataclasses import (
     RetrievalFailure,
     RetrievalRequest,
 )
+from app.services.latency import timed_stage
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +216,7 @@ def expand_keyword_query(query: str) -> tuple[list[str], list[str]]:
 
 
 class HybridRetriever(BaseModel):
+    @timed_stage("keyword_search")
     async def keyword_search(
         self,
         query: str,
@@ -291,6 +293,7 @@ class HybridRetriever(BaseModel):
             for rank, (document, score) in enumerate(rows, start=1)
         ]
 
+    @timed_stage("query_embedding")
     async def embed_query(self, query: str, model: str, dimensions: int) -> list[float]:
         try:
             from app.services.billing import billing_tokens, current_meter
@@ -319,6 +322,7 @@ class HybridRetriever(BaseModel):
                 "The search request could not be processed by the embedding provider. Please try again shortly.",
             ) from error
 
+    @timed_stage("semantic_search")
     async def semantic_search(
         self,
         query: str,

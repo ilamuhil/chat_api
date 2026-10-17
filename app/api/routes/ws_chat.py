@@ -4,6 +4,7 @@ import asyncio
 import logging
 import uuid
 from contextlib import suppress
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -17,6 +18,13 @@ from app.services.chat import (
     send_to_support_agent,
     send_typing_to_end_user,
     send_typing_to_support_agent,
+)
+from app.services.latency import (
+    TurnLatency,
+    current_latency,
+    latency_stage,
+    persist_latency,
+    track_turn,
 )
 from app.ws.agent_tool_api import get_conversation
 from app.ws.auth import authenticate_socket
@@ -66,7 +74,7 @@ async def chat(websocket: WebSocket):
         return
     lead_exists, lead_id = await has_lead(visitor_uuid, bot_id, session.organization_id)
     form_required = websocket == session.user_socket and not lead_exists
-    ai_queue: asyncio.Queue[dict[str, Any]] | None = None
+    ai_queue: asyncio.Queue[tuple[dict[str, Any], TurnLatency]] | None = None
     ai_worker_task: asyncio.Task[None] | None = None
 
     if websocket == session.user_socket:
@@ -74,15 +82,16 @@ async def chat(websocket: WebSocket):
 
         async def process_ai_queue() -> None:
             while True:
-                queued_message = await ai_queue.get()
+                queued_message, timing = await ai_queue.get()
                 try:
                     agent: CompiledStateGraph = websocket.app.state.agent
-                    await respond_with_ai(
-                        queued_message,
-                        bot_pref,
-                        session,
-                        agent,
-                    )
+                    async with track_turn(timing, session, bot_pref):
+                        await respond_with_ai(
+                            queued_message,
+                            bot_pref,
+                            session,
+                            agent,
+                        )
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -92,7 +101,6 @@ async def chat(websocket: WebSocket):
                     )
                 finally:
                     ai_queue.task_done()
-
         ai_worker_task = asyncio.create_task(process_ai_queue())
 
     try:
@@ -137,6 +145,7 @@ async def chat(websocket: WebSocket):
                 )
                 break
             message_data = await websocket.receive_json()
+            received_at = perf_counter()
             msg_type = (
                 message_data.get("type") if isinstance(message_data, dict) else None
             )
@@ -235,15 +244,22 @@ async def chat(websocket: WebSocket):
                 user_content = message_data.get("message") or message_data.get(
                     "content"
                 )
+                timing = TurnLatency(received_at=received_at)
                 if user_content:
-                    message_id = await log_message(
-                        session.conversation_id,
-                        "user",
-                        str(user_content),
-                        "text",
-                    )
+                    token = current_latency.set(timing)
+                    try:
+                        with latency_stage("user_message_persistence"):
+                            message_id = await log_message(
+                                session.conversation_id,
+                                "user",
+                                str(user_content),
+                                "text",
+                            )
+                    finally:
+                        current_latency.reset(token)
                     if message_id is not None:
                         message_data["message_id"] = str(message_id)
+                        timing.request_message_id = message_id
 
                 if session.mode == "human":
                     await send_typing_to_support_agent(session, False)
@@ -261,7 +277,8 @@ async def chat(websocket: WebSocket):
                                 }
                             )
                         else:
-                            ai_queue.put_nowait(message_data)
+                            timing.enqueued_at = perf_counter()
+                            ai_queue.put_nowait((message_data, timing))
 
             # agent -> user
             elif websocket == session.agent_socket:
@@ -297,6 +314,12 @@ async def chat(websocket: WebSocket):
                 await ai_worker_task
             except asyncio.CancelledError:
                 pass
+        if ai_queue is not None:
+            while not ai_queue.empty():
+                _, timing = ai_queue.get_nowait()
+                timing.outcome = "cancelled"
+                await persist_latency(timing, session, bot_pref)
+                ai_queue.task_done()
         if (
             websocket.application_state != WebSocketState.DISCONNECTED
             and websocket.client_state != WebSocketState.DISCONNECTED

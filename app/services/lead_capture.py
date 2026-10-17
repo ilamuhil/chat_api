@@ -16,7 +16,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from sqlalchemy import select
 from sqlalchemy import update as sql_update
 from sqlalchemy.dialects.postgresql import insert
@@ -40,7 +40,6 @@ from app.agent.lead_capture_models import (
     QuestionResolution,
     SourceKind,
 )
-from app.agent.lead_merge_service import LeadMergeService, MergePolicy, SourceRecord
 from app.db.session import (
     create_async_chat_db_session,
     create_async_dashboard_db_session,
@@ -49,6 +48,8 @@ from app.domain.chat import ChatSession
 from app.models.chat_db_models import Messages
 from app.models.dashboard_db_models import ConversationsMeta, LeadFollowUps, Leads
 from app.services.billing import model_callbacks
+from app.services.latency import timed_stage
+from app.services.lead_merge_service import LeadMergeService, MergePolicy, SourceRecord
 
 logger = logging.getLogger(__name__)
 PROFILE_METADATA_FIELDS = ("field_evidence", "declined_fields", "unresolved_conflicts")
@@ -173,7 +174,7 @@ def to_turn_update(
             FieldEvidence(
                 source_id=str(message.id),
                 source_kind=SourceKind.VISITOR_MESSAGE,
-                observed_at=message.created_at,
+                observed_at=message.created_at or datetime.now(UTC),
                 attribution=attribution,
                 uncertain=uncertain,
             )
@@ -181,15 +182,16 @@ def to_turn_update(
 
     patches_by_field = {}
     ambiguous_fields = set()
+    message_content = message.content or ""
     for observation in extraction.observations:
         if (
             observation.attribution in {Attribution.OTHER, Attribution.UNCLEAR}
             or observation.uncertain
         ):
             continue
+        clear_evidence = (observation.clear_evidence or "").strip()
         if observation.clear and (
-            not (observation.clear_evidence or "").strip()
-            or observation.clear_evidence.strip() not in message.content
+            not clear_evidence or clear_evidence not in message_content
         ):
             logger.warning(
                 "Ignored field removal without an explicit visitor quote",
@@ -294,6 +296,7 @@ def to_turn_update(
     )
 
 
+@timed_stage("lead_extraction")
 async def extract_turn(
     message: Messages,
     state: LeadCaptureState,
@@ -302,7 +305,7 @@ async def extract_turn(
 ) -> TurnExtraction:
     model = ChatOpenAI(
         model=prefs["llm_model"],
-        api_key=os.environ["OPENAI_API_KEY"],
+        api_key=SecretStr(os.environ["OPENAI_API_KEY"]),
         timeout=30,
         max_retries=0,
         max_completion_tokens=1800,
@@ -311,7 +314,7 @@ async def extract_turn(
     # JSON mode handles sparse patches and dynamic evidence maps without imposing
     # OpenAI's strict all-properties-required schema on our merge contracts.
     extractor = model.with_structured_output(TurnExtraction, method="json_mode")
-    return await extractor.ainvoke(
+    extraction = await extractor.ainvoke(
         [
             SystemMessage(
                 content="""Extract JSON visitor facts ONLY from the current persisted visitor message.
@@ -359,9 +362,10 @@ LeadProfile value schema:\n"""
             ),
         ]
     )
+    return TurnExtraction.model_validate(extraction)
 
 
-def manual_change_allows(field, value, evidence, metadata):
+def manual_change_allows(field, _, evidence, metadata):
     """A delayed visitor turn cannot undo a more recent dashboard edit."""
     modified = metadata.get("manual_updated_at", {}).get(field.value)
     return modified is None or all(
@@ -557,6 +561,7 @@ async def save_follow_up(db, lead, pending, *, status):
     pending.follow_up_id = result
 
 
+@timed_stage("lead_capture")
 async def capture_lead_turn(
     session: ChatSession, prefs: dict[str, Any], message_id: UUID
 ) -> dict[str, Any]:
@@ -712,8 +717,9 @@ async def capture_lead_turn(
                     LeadFollowUps.follow_up_type.in_(list(FOLLOW_UP_TYPES.values())),
                 )
                 .values(status="cancelled")
+                .returning(LeadFollowUps.id)
             )
-            cancelled_contact_tasks = cancelled.rowcount
+            cancelled_contact_tasks = len(cancelled.all())
         outcomes = await handle_actions(
             db, state, result.action_signals_to_handle, lead, message, policy
         )

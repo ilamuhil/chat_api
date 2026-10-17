@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.rag.embeddings import count_tokens
 from app.rag.shared_dataclasses import ConversationTurn, PreparedQuery, RetrievalRequest
 from app.services.billing import model_callbacks
+from app.services.latency import timed_stage
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class QueryPreparer(BaseModel):
         ..., gt=0, description="The maximum number of tokens in the query."
     )
 
+    @timed_stage("query_preparation")
     async def prepare(self, request: RetrievalRequest) -> PreparedQuery:
         try:
             history = self._select_history(request.scoped_conversation_history)
@@ -76,6 +78,7 @@ class QueryPreparer(BaseModel):
 
         return list(reversed(bounded_history))
 
+    @timed_stage("query_rewrite")
     async def _rewrite(
         self, history: list[ConversationTurn], original_message: str
     ) -> str:

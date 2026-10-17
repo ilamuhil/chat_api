@@ -14,6 +14,7 @@ from app.rag.shared_dataclasses import (
     RetrievalResult,
     RetrievalResultStatus,
 )
+from app.services.latency import timed_stage
 
 
 class RetrievalPipeline:
@@ -21,6 +22,7 @@ class RetrievalPipeline:
         self.chat_session = chat_session
         self.hybrid_retriever = HybridRetriever()
 
+    @timed_stage("retrieval_configuration")
     async def get_embedding_configuration(
         self, embedding_configuration_id: UUID, bot_id: UUID
     ) -> EmbeddingConfigurations | None:
@@ -32,6 +34,7 @@ class RetrievalPipeline:
             )
         )
 
+    @timed_stage("retrieval_configuration")
     async def get_bot_configuration(
         self,
         bot_id: UUID,
@@ -51,6 +54,7 @@ class RetrievalPipeline:
             ).limit(1)
         )
 
+    @timed_stage("retrieval")
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
         """Prepare, retrieve, fuse ranks, and assemble this turn's evidence."""
         embedding_configuration = await self.get_embedding_configuration(

@@ -127,6 +127,45 @@ class Documents(Base):
     # * html : {source:{url:str},structure:{content_type:"html",heading_paths:[str],domain:{}}
 
 
+class ResponseLatency(Base):
+    """One accepted AI turn, including failed/cancelled attempts."""
+
+    __tablename__ = "response_latency"
+    __table_args__ = (
+        CheckConstraint(
+            "response_ms IS NULL OR response_ms >= 0",
+            name="response_latency_response_valid",
+        ),
+        CheckConstraint("elapsed_ms >= 0", name="response_latency_elapsed_valid"),
+        CheckConstraint(
+            "outcome IN ('success', 'fallback', 'error', 'timeout', 'rejected', 'cached', 'cancelled', 'disconnected')",
+            name="response_latency_outcome_valid",
+        ),
+        ForeignKeyConstraint(
+            ["request_message_id"], ["messages.id"], ondelete="CASCADE"
+        ),
+        Index(
+            "response_latency_conversation_idx",
+            "organization_id",
+            "conversation_id",
+            "created_at",
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(Text, nullable=False)
+    bot_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    request_message_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    model: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    response_ms: Mapped[float | None] = mapped_column(Double)
+    elapsed_ms: Mapped[float] = mapped_column(Double, nullable=False)
+    stages_ms: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(True), nullable=False, server_default=text("now()")
+    )
+
+
 class Messages(Base):
     """Chat message persisted for a conversation.
 

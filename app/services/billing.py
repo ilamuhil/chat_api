@@ -23,6 +23,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from sqlalchemy import text
 
 from app.db.session import create_async_dashboard_db_session
+from app.services.latency import mark_response_sent, set_latency_outcome, timed_stage
 
 logger = logging.getLogger(__name__)
 TOKENIZER_VERSION = "cl100k_base-v1"
@@ -184,6 +185,7 @@ def model_callbacks() -> list[BaseCallbackHandler]:
     return [meter] if meter else []
 
 
+@timed_stage("billing_reservation")
 async def reserve_reply(org_id: str, request_id: str, request_hash: str):
     async with create_async_dashboard_db_session() as db:
         account = (
@@ -340,6 +342,7 @@ async def reserve_reply(org_id: str, request_id: str, request_hash: str):
         return None
 
 
+@timed_stage("billing_finalize")
 async def finish_reply(request_id: str, response: dict | None, meter: TurnMeter):
     async with create_async_dashboard_db_session() as db:
         row = (
@@ -402,6 +405,7 @@ async def finish_reply(request_id: str, response: dict | None, meter: TurnMeter)
         await db.commit()
 
 
+@timed_stage("billing_complete")
 async def complete_current_reply(payload: dict):
     request_id = current_reservation.get()
     meter = current_meter.get()
@@ -506,8 +510,10 @@ def metered_reply(function):
                 hashlib.sha256(content.encode()).hexdigest(),
             )
             if cached:
+                set_latency_outcome("cached")
                 if session.user_socket:
                     await session.user_socket.send_json(cached)
+                    mark_response_sent(cached)
                 return
             token = current_meter.set(meter)
             reservation_token = current_reservation.set(request_id)
@@ -515,6 +521,7 @@ def metered_reply(function):
                 function(message_data, bot_pref, session, agent), timeout=90
             )
         except BillingUnavailable as error:
+            set_latency_outcome("rejected")
             if session.user_socket:
                 await session.user_socket.send_json(
                     {
@@ -525,7 +532,11 @@ def metered_reply(function):
                         "conversation_id": session.conversation_id,
                     }
                 )
-        except Exception:
+                mark_response_sent({"type": "ai_unavailable"})
+        except Exception as error:
+            set_latency_outcome(
+                "timeout" if isinstance(error, TimeoutError) else "error"
+            )
             logger.exception(
                 "Metered AI request failed", extra={"request_id": request_id}
             )
@@ -539,6 +550,7 @@ def metered_reply(function):
                         "conversation_id": session.conversation_id,
                     }
                 )
+                mark_response_sent({"type": "ai_unavailable"})
         finally:
             if reservation_token is not None:
                 await finish_reply(request_id, None, meter)

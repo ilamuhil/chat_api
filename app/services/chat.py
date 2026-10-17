@@ -12,6 +12,7 @@ from langchain.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy import update
 
+from app.agent.lead_capture_models import LeadField
 from app.core.env import load_app_env
 from app.db.session import (
     create_async_chat_db_session,
@@ -29,6 +30,12 @@ from app.rag import (
 )
 from app.rag.shared_dataclasses import ConversationTurn, PreparedQuery, RetrievalFailure
 from app.services.billing import complete_current_reply, metered_reply, model_callbacks
+from app.services.latency import (
+    latency_stage,
+    mark_response_sent,
+    set_latency_outcome,
+    timed_stage,
+)
 from app.services.lead_capture import capture_lead_turn, record_lead_question
 
 logger = logging.getLogger(__name__)
@@ -115,6 +122,7 @@ async def end_user_typing(session: ChatSession) -> AsyncIterator[None]:
         await send_typing_to_end_user(session, False)
 
 
+@timed_stage("message_persistence")
 async def _persist_message(
     conversation_id: str,
     role: MessageRole,
@@ -252,6 +260,7 @@ async def _persist_retrieval_log(
         await chat_db.commit()
 
 
+@timed_stage("retrieval_log")
 async def log_retrieval(
     *,
     organization_id: str,
@@ -295,6 +304,7 @@ async def _send_json_safe(socket: WebSocket | None, data: dict[str, Any]) -> Non
         return
     try:
         await socket.send_json(data)
+        mark_response_sent(data)
     except (RuntimeError, WebSocketDisconnect):
         # The peer can disconnect between the socket check and this send.
         # Cleanup notifications, such as typing=False, must not mask that
@@ -336,6 +346,7 @@ async def send_to_end_user(
     )
 
 
+@timed_stage("history_load")
 async def _retrieval_history(
     agent: Any, config: RunnableConfig
 ) -> list[ConversationTurn]:
@@ -494,11 +505,12 @@ async def respond_with_ai(
                 conversation_id=uuid.UUID(str(session.conversation_id)),
                 lead_capture=lead_capture,
             )
-            response = await agent.ainvoke(
-                {"messages": [HumanMessage(content=user_text)]},
-                config=config,
-                context=context,
-            )
+            with latency_stage("agent"):
+                response = await agent.ainvoke(
+                    {"messages": [HumanMessage(content=user_text)]},
+                    config=config,
+                    context=context,
+                )
 
             response_messages = response.get("messages", [])
             tool_calls = [
@@ -532,6 +544,7 @@ async def respond_with_ai(
                         "had_rag_context": has_evidence,
                     },
                 )
+                set_latency_outcome("fallback")
                 await send_to_end_user(
                     {
                         "type": "message",
@@ -558,12 +571,17 @@ async def respond_with_ai(
                 "conversation_id": session.conversation_id,
             }
             await complete_current_reply(reply_payload)
+            set_latency_outcome("success")
             answer_id = await send_to_end_user(reply_payload, session)
             if answer_id and context.lead_question:
                 question_text, fields = context.lead_question
                 try:
                     await record_lead_question(
-                        session, bot_pref, answer_id, question_text, fields
+                        session,
+                        bot_pref,
+                        answer_id,
+                        question_text,
+                        [LeadField(field) for field in fields],
                     )
                 except Exception:
                     logger.exception(
@@ -572,6 +590,7 @@ async def respond_with_ai(
                     )
         except Exception as e:
             from app.services.billing import BillingUnavailable
+
             if isinstance(e, BillingUnavailable):
                 raise
             logger.exception("Error in respond_with_ai", extra={"error": e})
