@@ -51,11 +51,13 @@ def delete_training_source_job(
         chat_session.commit()
 
         source = dashboard_session.scalars(
-            select(TrainingSources).where(
+            select(TrainingSources)
+            .where(
                 TrainingSources.id == source_uuid,
                 TrainingSources.bot_id == bot_uuid,
                 TrainingSources.organization_id == organization_id,
             )
+            .with_for_update()
         ).one_or_none()
         if source is None:
             job.status = "cleanup_completed"
@@ -77,7 +79,11 @@ def delete_training_source_job(
             update(Embeddings)
             .where(
                 Embeddings.document_id.in_(
-                    select(Documents.id).where(Documents.source_id == source_uuid)
+                    select(Documents.id).where(
+                        Documents.source_id == source_uuid,
+                        Documents.organization_id == organization_id,
+                        Documents.bot_id == bot_uuid,
+                    )
                 ),
                 Embeddings.deleted_at.is_(None),
             )
@@ -87,9 +93,10 @@ def delete_training_source_job(
             update(Documents)
             .where(
                 Documents.source_id == source_uuid,
-                Documents.deleted_at.is_(None),
+                Documents.organization_id == organization_id,
+                Documents.bot_id == bot_uuid,
             )
-            .values(deleted_at=deleted_at)
+            .values(is_active=False, deleted_at=deleted_at)
         )
         chat_session.commit()
 

@@ -7,8 +7,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_async_chat_db
+from app.db.session import create_async_dashboard_db_session, get_async_chat_db
 from app.models.chat_db_models import Messages
+from app.models.dashboard_db_models import ConversationsMeta
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -26,8 +27,6 @@ async def get_conversation_latency(
         conversation_id
     ):
         raise HTTPException(status_code=403, detail="Conversation access denied")
-    from app.db.session import create_async_dashboard_db_session
-    from app.models.dashboard_db_models import ConversationsMeta
 
     async with create_async_dashboard_db_session() as dashboard:
         exists = await dashboard.scalar(
@@ -80,21 +79,39 @@ async def get_conversation_latency(
 
 @router.get("/conversations/{conversation_id}/messages")
 async def get_messages(
-    conversation_id: str,
+    conversation_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_async_chat_db)],
+    request: Request,
 ):
-    """Given the conversation id return all the messages in the conversation from the messages table"""
+    """Return history only for the caller's signed conversation scope."""
 
     try:
-        # ! organization level authorization check is done by the dashboard server. No need to check again here.
+        claims = request.state.claims
+        # A valid bot token must not grant access to another visitor's history.
+        if claims.get("type") not in ("user", "support_agent") or claims.get(
+            "conversation_id"
+        ) != str(conversation_id):
+            raise HTTPException(status_code=403, detail="Conversation access denied")
 
-        if not conversation_id:
-            logger.error("Conversation id not found in claims")
+        conversation_uuid = conversation_id
+        organization_id = request.state.organization_id
+        try:
+            bot_id = uuid.UUID(str(claims.get("bot_id")))
+        except (TypeError, ValueError, AttributeError):
             raise HTTPException(
-                status_code=401,
-                detail="Conversation not found in claims",
+                status_code=403, detail="Conversation access denied"
+            ) from None
+
+        async with create_async_dashboard_db_session() as dashboard:
+            owned = await dashboard.scalar(
+                select(ConversationsMeta.id).where(
+                    ConversationsMeta.id == conversation_uuid,
+                    ConversationsMeta.organization_id == organization_id,
+                    ConversationsMeta.bot_id == bot_id,
+                )
             )
-        conversation_uuid = uuid.UUID(conversation_id)
+        if owned is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
 
         messages_result = await db.scalars(
             select(Messages)

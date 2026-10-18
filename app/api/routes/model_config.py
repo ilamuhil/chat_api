@@ -2,15 +2,17 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_async_chat_db
+from app.db.session import create_async_dashboard_db_session, get_async_chat_db
 from app.infra.local_cache import configuration_cache
 from app.models.chat_db_models import BotConfigurations, EmbeddingConfigurations
+from app.models.dashboard_db_models import Bots, OrganizationMembers
 from app.services.billing import STANDARD_MODEL
 
 
@@ -36,16 +38,17 @@ router = APIRouter()
 
 @router.post("/model-config/create", response_model=ModelConfigCreateResponse)
 async def create_model_config(
-    request: ModelConfigCreate,
+    body: ModelConfigCreate,
+    request: Request,
     chat_db: Annotated[AsyncSession, Depends(get_async_chat_db)],
 ):
-    if not request.bot_id:
+    if not body.bot_id:
         logger.error("Bot Id was not provided by Dashboard server")
         return JSONResponse(
             content={"error": "Bot Id was not provided by Dashboard server"},
             status_code=400,
         )
-    if not request.user_id:
+    if not body.user_id:
         logger.error("User Id was not provided by Dashboard server")
         return JSONResponse(
             content={"error": "User Id was not provided by Dashboard server"},
@@ -53,8 +56,37 @@ async def create_model_config(
         )
 
     try:
-        bot_uuid = uuid.UUID(request.bot_id)
-        user_uuid = uuid.UUID(request.user_id)
+        bot_uuid = uuid.UUID(body.bot_id)
+        user_uuid = uuid.UUID(body.user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="bot_id and user_id must be valid UUIDs",
+        ) from None
+
+    organization_id = request.state.organization_id
+    async with create_async_dashboard_db_session() as dashboard:
+        admin = await dashboard.scalar(
+            select(OrganizationMembers.id).where(
+                OrganizationMembers.organization_id == organization_id,
+                OrganizationMembers.user_id == user_uuid,
+                OrganizationMembers.role == "admin",
+            )
+        )
+        if admin is None:
+            raise HTTPException(
+                status_code=403, detail="Organization administrator required"
+            )
+        owned_bot = await dashboard.scalar(
+            select(Bots.id).where(
+                Bots.id == bot_uuid,
+                Bots.organization_id == organization_id,
+            )
+        )
+    if owned_bot is None:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    try:
         embedding_configuration = EmbeddingConfigurations(
             bot_id=bot_uuid,
             provider="openai",
@@ -86,12 +118,6 @@ async def create_model_config(
         await chat_db.commit()
         configuration_cache.invalidate_bot(str(bot_uuid))
         return ModelConfigCreateResponse(config_id=config_id)
-    except ValueError:
-        await chat_db.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail="bot_id and user_id must be valid UUIDs",
-        ) from None
     except IntegrityError:
         await chat_db.rollback()
         raise HTTPException(

@@ -179,7 +179,9 @@ class AggregateAuthorizationTests(unittest.TestCase):
         result = MagicMock()
         result.mappings.return_value.first.return_value = None
         self.db.execute.return_value = result
-        with patch("app.db.session.create_async_dashboard_db_session") as factory:
+        with patch(
+            "app.api.routes.messages.create_async_dashboard_db_session"
+        ) as factory:
             factory.return_value.__aenter__ = AsyncMock(return_value=dashboard)
             factory.return_value.__aexit__ = AsyncMock(return_value=False)
             with TestClient(self.app) as client:
@@ -193,7 +195,9 @@ class AggregateAuthorizationTests(unittest.TestCase):
     def test_different_organization_conversation_is_not_found(self):
         dashboard = AsyncMock(spec=AsyncSession)
         dashboard.scalar.return_value = None
-        with patch("app.db.session.create_async_dashboard_db_session") as factory:
+        with patch(
+            "app.api.routes.messages.create_async_dashboard_db_session"
+        ) as factory:
             factory.return_value.__aenter__ = AsyncMock(return_value=dashboard)
             factory.return_value.__aexit__ = AsyncMock(return_value=False)
             with TestClient(self.app) as client:

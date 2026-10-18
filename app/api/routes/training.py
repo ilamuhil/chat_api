@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from rq import Callback, Queue
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_async_chat_db, get_async_dashboard_db
@@ -18,10 +18,11 @@ from app.ingestion.errors import TrainingFailure, append_errors, error_records
 from app.ingestion.jobs import process_training_job, training_job_failure_callback
 from app.models.chat_db_models import (
     BotConfigurations,
+    Documents,
     EmbeddingConfigurations,
     TrainingJobs,
 )
-from app.models.dashboard_db_models import TrainingSources
+from app.models.dashboard_db_models import Files, TrainingSources
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +161,7 @@ async def queue_training(
         )
         if requested_ids is not None:
             statement = statement.where(TrainingSources.id.in_(requested_ids))
-        sources = (await dashboard_db.scalars(statement)).all()
+        sources = (await dashboard_db.scalars(statement.with_for_update())).all()
         selected_ids = [source.id for source in sources]
         if requested_ids is not None and set(selected_ids) != set(requested_ids):
             return JSONResponse(
@@ -333,8 +334,11 @@ async def delete_training_source(
     source_id: uuid.UUID,
     request: Request,
     chat_db: Annotated[AsyncSession, Depends(get_async_chat_db)],
+    dashboard_db: Annotated[AsyncSession, Depends(get_async_dashboard_db)],
 ):
     claims = request.state.claims
+    if claims.get("type") != "support_agent":
+        return JSONResponse({"error": "Source removal access denied"}, status_code=403)
     try:
         bot_id = uuid.UUID(str(claims.get("bot_id")))
     except (ValueError, TypeError):
@@ -342,6 +346,30 @@ async def delete_training_source(
     job: TrainingJobs | None = None
     job_id: uuid.UUID | None = None
     try:
+        # Serialize removal with training admission until the deletion is committed.
+        source = (
+            await dashboard_db.scalars(
+                select(TrainingSources)
+                .where(
+                    TrainingSources.id == source_id,
+                    TrainingSources.organization_id == request.state.organization_id,
+                    TrainingSources.bot_id == bot_id,
+                )
+                .with_for_update()
+            )
+        ).one_or_none()
+        if source is None:
+            return JSONResponse({"error": "Source not found"}, status_code=404)
+        if source.deleted_at is None and source.status in (
+            "processing",
+            "queued_for_training",
+            "training",
+        ):
+            return JSONResponse(
+                {"error": "Wait for source processing or training to complete."},
+                status_code=409,
+            )
+
         config = (
             await chat_db.scalars(
                 select(EmbeddingConfigurations).where(
@@ -380,6 +408,17 @@ async def delete_training_source(
             error_message=[],
         )
         chat_db.add(job)
+        removed_at = datetime.now(UTC)
+        # Retrieval must stop before dashboard metadata can report deletion.
+        await chat_db.execute(
+            update(Documents)
+            .where(
+                Documents.source_id == source_id,
+                Documents.organization_id == request.state.organization_id,
+                Documents.bot_id == bot_id,
+            )
+            .values(is_active=False, deleted_at=removed_at)
+        )
         await chat_db.commit()
         Queue(connection=redis_client).enqueue(
             delete_training_source_job,
@@ -388,10 +427,30 @@ async def delete_training_source(
             claims.get("organization_id"),
             str(bot_id),
         )
+        # The worker locks this source too, so it waits for this transaction.
+        source.deleted_at = source.deleted_at or removed_at
+        source.deleted_by = source.deleted_by or claims.get("sub") or "system"
+        if source.type == "file" and source.source_value:
+            await dashboard_db.execute(
+                update(Files)
+                .where(
+                    Files.path == source.source_value,
+                    Files.organization_id == request.state.organization_id,
+                    Files.bot_id == bot_id,
+                    Files.deleted_at.is_(None),
+                )
+                .values(deleted_at=removed_at, deleted_by=source.deleted_by)
+            )
+        await dashboard_db.commit()
         return JSONResponse(
-            {"message": "Source removal queued", "job_id": str(job_id)}, status_code=200
+            {
+                "message": "Training source removed. File cleanup queued.",
+                "job_id": str(job_id),
+            },
+            status_code=200,
         )
     except Exception as error:
+        await dashboard_db.rollback()
         logger.exception("Could not queue source removal")
         records = error_records(
             error,
