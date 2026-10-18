@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -8,7 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from rq import Callback, Queue
-from sqlalchemy import desc, select, update
+from sqlalchemy import desc, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_async_chat_db, get_async_dashboard_db
@@ -138,6 +139,18 @@ async def queue_training(
     job_uuid: uuid.UUID | None = None
     selected_ids: list[uuid.UUID] | None = None
     try:
+        # Hold admission through the job commit, across all API processes.
+        lock_key = int.from_bytes(
+            hashlib.sha256(
+                f"training-admission:{organization_id}:{bot_uuid}".encode()
+            ).digest()[:8],
+            byteorder="big",
+            signed=True,
+        )
+        await chat_db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": lock_key},
+        )
         existing = (
             await chat_db.scalars(
                 select(TrainingJobs).where(

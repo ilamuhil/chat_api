@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import WebSocket
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +17,12 @@ class ChatSession(BaseModel):
     agent_user_id: str | None = None
     end_chat_requested: bool = False
     mode: Literal["ai", "human"] = Field(default="ai")
+    handover_version: int = 0
+    user_connection_id: str | None = None
+    agent_connection_id: str | None = None
+    active_user_connection_id: str | None = None
+    active_agent_connection_id: str | None = None
+    ai_turn_task: Any = Field(default=None, exclude=True)
 
     def agent_connect(self, websocket: WebSocket, user_id: str | None = None):
         self.agent_socket = websocket
@@ -31,7 +37,7 @@ class ChatSession(BaseModel):
         self.agent_socket = None
         self.agent_user_id = None
         self.end_chat_requested = False
-        self.mode = "ai"
+        # Preserve human mode across a transient counsellor disconnect.
 
     def user_disconnect(self):
         self.user_socket = None

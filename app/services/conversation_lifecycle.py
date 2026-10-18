@@ -79,6 +79,11 @@ async def close_conversation(
             return False
         if conversation.status != "closed":
             conversation.status = "closed"
+            conversation.handover_version = (
+                getattr(conversation, "handover_version", None) or 0
+            ) + 1
+            conversation.agent_connection_id = None
+            conversation.visitor_connection_id = None
             conversation.closed_by = closed_by
             conversation.closed_at = datetime.now(UTC)
             conversation.summary_status = "pending"

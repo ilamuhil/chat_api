@@ -493,6 +493,8 @@ async def finish_auxiliary(key: str, meter: TurnMeter, success: bool):
 def metered_reply(function):
     @wraps(function)
     async def wrapped(message_data, bot_pref, session, agent):
+        from app.services.chat import _send_json_safe
+
         raw_id = str(
             message_data.get("request_id") or message_data.get("message_id") or uuid4()
         )
@@ -518,7 +520,7 @@ def metered_reply(function):
             if cached:
                 set_latency_outcome("cached")
                 if session.user_socket:
-                    await session.user_socket.send_json(cached)
+                    await _send_json_safe(session.user_socket, cached)
                     mark_response_sent(cached)
                 return
             token = current_meter.set(meter)
@@ -529,14 +531,15 @@ def metered_reply(function):
         except BillingUnavailable as error:
             set_latency_outcome("rejected")
             if session.user_socket:
-                await session.user_socket.send_json(
+                await _send_json_safe(
+                    session.user_socket,
                     {
                         "type": "ai_unavailable",
                         "code": error.code,
                         "message": str(error),
                         "fallback": "contact",
                         "conversation_id": session.conversation_id,
-                    }
+                    },
                 )
                 mark_response_sent({"type": "ai_unavailable"})
         except Exception as error:
@@ -547,14 +550,15 @@ def metered_reply(function):
                 "Metered AI request failed", extra={"request_id": request_id}
             )
             if session.user_socket:
-                await session.user_socket.send_json(
+                await _send_json_safe(
+                    session.user_socket,
                     {
                         "type": "ai_unavailable",
                         "code": "service_unavailable",
                         "message": "The assistant is temporarily unavailable. You can leave your details or request a counsellor.",
                         "fallback": "contact",
                         "conversation_id": session.conversation_id,
-                    }
+                    },
                 )
                 mark_response_sent({"type": "ai_unavailable"})
         finally:

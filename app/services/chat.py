@@ -39,6 +39,7 @@ from app.services.latency import (
 )
 from app.services.lead_capture import capture_lead_turn, record_lead_question
 from app.services.lead_context import plan_lead_question
+from app.ws.handover import current_ai_scope, guard_ai_output, relay_to
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +99,7 @@ async def send_typing_to_end_user(
     *,
     actor: str | None = None,
 ) -> None:
-    await _send_json_safe(
-        session.user_socket, _typing_payload(session, is_typing, actor)
-    )
+    await relay_to(session, "user", _typing_payload(session, is_typing, actor))
 
 
 async def send_typing_to_support_agent(
@@ -109,9 +108,7 @@ async def send_typing_to_support_agent(
     *,
     actor: str | None = None,
 ) -> None:
-    await _send_json_safe(
-        session.agent_socket, _typing_payload(session, is_typing, actor)
-    )
+    await relay_to(session, "agent", _typing_payload(session, is_typing, actor))
 
 
 @asynccontextmanager
@@ -121,7 +118,11 @@ async def end_user_typing(session: ChatSession) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        await send_typing_to_end_user(session, False)
+        token = current_ai_scope.set(None)
+        try:
+            await send_typing_to_end_user(session, False)
+        finally:
+            current_ai_scope.reset(token)
 
 
 @timed_stage("message_persistence")
@@ -305,7 +306,11 @@ async def _send_json_safe(socket: WebSocket | None, data: dict[str, Any]) -> Non
     if socket is None:
         return
     try:
-        await socket.send_json(data)
+        if data.get("type") == "message_abort":
+            await socket.send_json(data)
+        else:
+            async with guard_ai_output():
+                await socket.send_json(data)
         mark_response_sent(data)
     except (RuntimeError, WebSocketDisconnect):
         # The peer can disconnect between the socket check and this send.
@@ -316,8 +321,8 @@ async def _send_json_safe(socket: WebSocket | None, data: dict[str, Any]) -> Non
 
 async def send_to_support_agent(
     message_data: dict[str, Any], session: ChatSession
-) -> None:
-    await _send_json_safe(session.agent_socket, message_data)
+) -> bool:
+    return await relay_to(session, "agent", {**message_data, "role": "user"})
 
 
 async def send_to_end_user(
@@ -326,7 +331,7 @@ async def send_to_end_user(
     *,
     persist: bool = True,
 ) -> uuid.UUID | None:
-    await _send_json_safe(session.user_socket, message_data)
+    await relay_to(session, "user", message_data)
 
     if not persist or message_data.get("type") == "typing":
         return

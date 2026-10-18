@@ -753,6 +753,12 @@ class ConversationsMeta(Base):
     mode: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'ai'")
     )  # ! ai | human
+    handover_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    visitor_connection_id: Mapped[uuid.UUID | None] = mapped_column()
+    agent_connection_id: Mapped[uuid.UUID | None] = mapped_column()
+    active_agent_id: Mapped[uuid.UUID | None] = mapped_column()
     organization_id: Mapped[str] = mapped_column(
         ForeignKey("public.organizations.id", ondelete="CASCADE")
     )

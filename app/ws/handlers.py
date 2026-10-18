@@ -16,6 +16,7 @@ from app.db.session import (
     create_async_dashboard_db_session,
 )
 from app.domain import ChatSession
+from app.infra.redis_client import async_redis_client
 from app.infra.redis_store import async_get_data, async_set_data
 from app.models.chat_db_models import (
     BotConfigurations,
@@ -35,6 +36,7 @@ from app.services.notifications import (
     create_notifications,
     publish_notifications,
 )
+from app.ws.handover import connection_key, relay_to
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +330,9 @@ async def handle_form_capture(
     await send_to_end_user(
         {
             "type": "form_capture",
-            "message": "Your details have been saved for the institute." if message_data.get("fallback") == "contact" else "Thank you for submitting your details. You can start your conversation now.",
+            "message": "Your details have been saved for the institute."
+            if message_data.get("fallback") == "contact"
+            else "Thank you for submitting your details. You can start your conversation now.",
             "fallback": message_data.get("fallback"),
             "role": "system",
             "conversation_id": session.conversation_id,
@@ -337,7 +341,10 @@ async def handle_form_capture(
     )
     if message_data.get("fallback") != "contact":
         await send_first_message_once(
-            greeting_key, conversation_uuid, first_message, session,
+            greeting_key,
+            conversation_uuid,
+            first_message,
+            session,
         )
     return False
 
@@ -389,11 +396,17 @@ async def request_end_chat(session: ChatSession, websocket: WebSocket) -> bool:
     if websocket != session.user_socket:
         return False
     agent = session.agent_socket
-    if (
+    local_agent_connected = (
         agent is not None
         and agent.application_state == WebSocketState.CONNECTED
         and agent.client_state == WebSocketState.CONNECTED
-    ):
+    )
+    remote_agent_connected = session.active_agent_connection_id is not None and bool(
+        await async_redis_client.exists(
+            connection_key(session.active_agent_connection_id)
+        )
+    )
+    if local_agent_connected or remote_agent_connected:
         if not session.end_chat_requested:
             if not session.agent_user_id:
                 await websocket.send_json(
@@ -423,13 +436,15 @@ async def request_end_chat(session: ChatSession, websocket: WebSocket) -> bool:
             await publish_notifications(
                 organization_id=session.organization_id, notifications=notifications
             )
-            await agent.send_json(
+            await relay_to(
+                session,
+                "agent",
                 {
                     "type": "end_chat_request",
                     "role": "system",
                     "message": "The visitor has requested to end this conversation.",
                     "conversation_id": session.conversation_id,
-                }
+                },
             )
         await websocket.send_json(
             {
