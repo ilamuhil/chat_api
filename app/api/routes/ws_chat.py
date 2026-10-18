@@ -105,7 +105,10 @@ async def process_ai_queue(ai_queue, session, bot_pref, agent) -> None:
 @router.websocket("/chat/ws")
 async def chat(websocket: WebSocket):
     await websocket.accept()
-    metadata = await authenticate_socket(websocket, ACTIVE_SESSIONS)
+    try:
+        metadata = await authenticate_socket(websocket, ACTIVE_SESSIONS)
+    except WebSocketDisconnect:
+        return
     if metadata is None:
         return
 
@@ -113,46 +116,52 @@ async def chat(websocket: WebSocket):
     role = websocket.state.chat_role
     connection_id = websocket.state.connection_id
 
-    bot_pref = (
-        await load_bot_prefs(websocket, bot_id)
-        if role == "user"
-        else {"bot_id": str(bot_id)}
-    )
-    if bot_pref is None:
-        await unregister_connection(session, role, connection_id)
-        return
-
-    first_message = bot_pref.get("first_message") or "Hi, How can I help you today?"
-    greeting_key = f"greeting_sent:{session.conversation_id}"
-    conversation_uuid = uuid.UUID(str(session.conversation_id))
-    logger.info("Conversation UUID", extra={"conversation_uuid": conversation_uuid})
-
-    visitor_uuid = None
-    lead_exists, lead_id = False, None
-    if role == "user":
-        try:
-            visitor_uuid = uuid.UUID(str(session.visitor_id))
-        except (ValueError, TypeError):
-            await websocket.close(code=1008, reason="Invalid visitor identity")
-            await unregister_connection(session, role, connection_id)
-            return
-        lead_exists, lead_id = await has_lead(
-            visitor_uuid, bot_id, session.organization_id
-        )
-    form_required = websocket == session.user_socket and not lead_exists
     ai_queue: asyncio.Queue[tuple[dict[str, Any], TurnLatency, AITurnScope]] | None = (
         None
     )
     ai_worker_task: asyncio.Task[None] | None = None
 
-    if websocket == session.user_socket:
-        ai_queue = asyncio.Queue(maxsize=3)
-
-        ai_worker_task = asyncio.create_task(
-            process_ai_queue(ai_queue, session, bot_pref, websocket.app.state.agent)
-        )
-
+    bot_pref = {}
     try:
+        if role == "user":
+            await websocket.send_json(
+                {
+                    "type": "connection_authenticated",
+                    "conversation_id": session.conversation_id,
+                }
+            )
+        bot_pref = (
+            await load_bot_prefs(websocket, bot_id)
+            if role == "user"
+            else {"bot_id": str(bot_id)}
+        )
+        if bot_pref is None:
+            return
+
+        first_message = bot_pref.get("first_message") or "Hi, How can I help you today?"
+        greeting_key = f"greeting_sent:{session.conversation_id}"
+        conversation_uuid = uuid.UUID(str(session.conversation_id))
+        logger.info("Conversation UUID", extra={"conversation_uuid": conversation_uuid})
+
+        visitor_uuid = None
+        lead_exists, lead_id = False, None
+        if role == "user":
+            try:
+                visitor_uuid = uuid.UUID(str(session.visitor_id))
+            except (ValueError, TypeError):
+                await websocket.close(code=1008, reason="Invalid visitor identity")
+                return
+            lead_exists, lead_id = await has_lead(
+                visitor_uuid, bot_id, session.organization_id
+            )
+        form_required = websocket == session.user_socket and not lead_exists
+        if websocket == session.user_socket:
+            ai_queue = asyncio.Queue(maxsize=3)
+
+            ai_worker_task = asyncio.create_task(
+                process_ai_queue(ai_queue, session, bot_pref, websocket.app.state.agent)
+            )
+
         await refresh_session(session)
         if role == "support_agent":
             await websocket.send_json(await state_payload(session))
@@ -191,6 +200,15 @@ async def chat(websocket: WebSocket):
             await websocket.send_json(
                 {"type": "agent_ready", "conversation_id": session.conversation_id}
             )
+        if websocket == session.user_socket:
+            await websocket.send_json(
+                {
+                    "type": "conversation_ready",
+                    "conversation_id": session.conversation_id,
+                    "form_required": form_required,
+                }
+            )
+            await websocket.send_json(await state_payload(session))
         # Returning users already submitted the form. Skip it and only send the
         # greeting if this conversation has never received one.
         if websocket == session.user_socket and not form_required:
@@ -205,15 +223,6 @@ async def chat(websocket: WebSocket):
                     session,
                 )
 
-        if websocket == session.user_socket:
-            await websocket.send_json(
-                {
-                    "type": "conversation_ready",
-                    "conversation_id": session.conversation_id,
-                    "form_required": form_required,
-                }
-            )
-            await websocket.send_json(await state_payload(session))
         while True:
             # if conversation is closed disconnect the websocket
             try:
@@ -470,6 +479,11 @@ async def chat(websocket: WebSocket):
 
     except WebSocketDisconnect as e:
         logger.info("Chat session was disconnected", extra={"error": str(e)})
+    except RuntimeError as e:
+        if websocket.application_state == WebSocketState.DISCONNECTED:
+            logger.debug("Socket closed during chat setup or delivery")
+        else:
+            logger.exception("Error in chat session", extra={"error": e})
     except Exception as e:
         logger.exception("Error in chat session", extra={"error": e})
     finally:

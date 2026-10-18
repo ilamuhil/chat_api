@@ -445,6 +445,11 @@ class HandoverTests(IsolatedAsyncioTestCase):
         app.include_router(socket_router, prefix="/api")
         app.state.agent = object()
         started, cancelled = threading.Event(), threading.Event()
+        allow_greeting = threading.Event()
+
+        async def slow_greeting(*args):
+            if not await asyncio.to_thread(allow_greeting.wait, 2):
+                raise AssertionError("Readiness must precede slow greeting completion")
 
         async def delayed_ai(*args):
             started.set()
@@ -492,7 +497,10 @@ class HandoverTests(IsolatedAsyncioTestCase):
             patch(
                 "app.api.routes.ws_chat.has_lead", AsyncMock(return_value=(True, None))
             ),
-            patch("app.api.routes.ws_chat.send_first_message_once", AsyncMock()),
+            patch(
+                "app.api.routes.ws_chat.send_first_message_once",
+                AsyncMock(side_effect=slow_greeting),
+            ),
             patch(
                 "app.api.routes.ws_chat.log_message",
                 AsyncMock(side_effect=lambda *a: uuid4()),
@@ -513,8 +521,12 @@ class HandoverTests(IsolatedAsyncioTestCase):
             }
             with client.websocket_connect("/api/chat/ws") as visitor:
                 visitor.send_json(auth)
+                self.assertEqual(
+                    visitor.receive_json()["type"], "connection_authenticated"
+                )
                 self.assertEqual(visitor.receive_json()["type"], "conversation_ready")
                 self.assertEqual(visitor.receive_json()["mode"], "ai")
+                allow_greeting.set()
                 visitor.send_json({"type": "message", "message": "first question"})
                 self.assertTrue(started.wait(2))
                 with client.websocket_connect("/api/chat/ws") as agent:
@@ -541,6 +553,9 @@ class HandoverTests(IsolatedAsyncioTestCase):
                     self.assertEqual(incoming["message"], "human reply")
             with client.websocket_connect("/api/chat/ws") as reconnected:
                 reconnected.send_json(auth)
+                self.assertEqual(
+                    reconnected.receive_json()["type"], "connection_authenticated"
+                )
                 self.assertEqual(
                     reconnected.receive_json()["type"], "conversation_ready"
                 )
@@ -588,3 +603,37 @@ class HandoverTests(IsolatedAsyncioTestCase):
                 }
             )
             send.assert_not_awaited()
+
+    async def test_disconnect_during_startup_releases_registered_connection(self):
+        from starlette.websockets import WebSocketState
+
+        from app.api.routes.ws_chat import chat
+
+        ws = self.session.user_socket
+        ws.state.chat_role = "user"
+        ws.state.connection_id = self.user_connection_id
+        ws.application_state = WebSocketState.CONNECTED
+
+        async def unavailable(*args):
+            ws.application_state = WebSocketState.DISCONNECTED
+            return None
+
+        with (
+            patch(
+                "app.api.routes.ws_chat.authenticate_socket",
+                AsyncMock(return_value=(self.session, self.bot_id)),
+            ),
+            patch(
+                "app.api.routes.ws_chat.load_bot_prefs",
+                AsyncMock(side_effect=unavailable),
+            ),
+            patch(
+                "app.api.routes.ws_chat.unregister_connection", AsyncMock()
+            ) as detach,
+            patch("app.api.routes.ws_chat.logger") as logger,
+        ):
+            await chat(ws)
+            detach.assert_awaited_once_with(
+                self.session, "user", self.user_connection_id
+            )
+            logger.exception.assert_not_called()
