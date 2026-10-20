@@ -64,6 +64,20 @@ async def create_model_config(
             detail="bot_id and user_id must be valid UUIDs",
         ) from None
 
+    claims = request.state.claims
+    # Administrative operations must be authorized by the signed identity,
+    # never by a user_id supplied in the request body.
+    if claims.get("type") != "dashboard_admin":
+        raise HTTPException(status_code=403, detail="Administrator token required")
+    try:
+        authenticated_user_id = uuid.UUID(str(claims.get("user_id")))
+    except (TypeError, ValueError, AttributeError):
+        raise HTTPException(status_code=403, detail="Administrator identity required") from None
+    if authenticated_user_id != user_uuid:
+        raise HTTPException(status_code=403, detail="User identity mismatch")
+    if claims.get("bot_id") != str(bot_uuid):
+        raise HTTPException(status_code=403, detail="Bot scope mismatch")
+
     organization_id = request.state.organization_id
     async with create_async_dashboard_db_session() as dashboard:
         admin = await dashboard.scalar(
